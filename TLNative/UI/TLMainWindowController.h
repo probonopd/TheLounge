@@ -9,11 +9,13 @@
 #import "TLNetworkOutlineView.h"
 #import "TLMessageView.h"
 #import "TLUserListView.h"
+#import "TLContextMenuBuilder.h"
 
 @class TLoungeSession;
 
 @interface TLMainWindowController : NSWindowController <NSSplitViewDelegate,
-	TLNetworkOutlineViewDelegate, TLMessageViewDelegate, NSWindowDelegate>
+	TLNetworkOutlineViewDelegate, TLMessageViewDelegate, NSWindowDelegate,
+	TLUserListViewDelegate, TLContextMenuActionDelegate>
 {
 	TLoungeSession *_session;
 	NSSplitView *_splitView;
@@ -24,7 +26,12 @@
 	NSButton *_sendButton;
 	NSTextField *_statusLabel;
 	NSInteger _selectedChannelId;
+	NSString *_selectedUserNick;
 	BOOL _loadingHistory;
+	// Bounds how many history batches are fetched automatically to fill a
+	// transcript shorter than the viewport; guards against a server that
+	// keeps reporting more messages than it actually sends.
+	NSInteger _autoHistoryBatches;
 }
 
 @property (nonatomic, readonly) TLoungeSession *session;

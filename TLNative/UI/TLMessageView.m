@@ -188,6 +188,14 @@
 	return [_scrollView contentView].bounds.origin.y <= 0.0;
 }
 
+- (BOOL)contentFillsViewport
+{
+	NSClipView *clipView = [_scrollView contentView];
+	// The frame only grows once layout has processed pending edits.
+	[[_textView layoutManager] ensureLayoutForTextContainer:[_textView textContainer]];
+	return NSHeight([_textView frame]) > NSHeight([clipView bounds]) + 2.0;
+}
+
 - (void)clipViewBoundsDidChange:(NSNotification *)notification
 {
 	if (!_hasMoreHistory || ![_delegate respondsToSelector:@selector(messageViewDidScrollToTop:)]) {

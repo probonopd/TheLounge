@@ -10,6 +10,47 @@
 #import "TLNetwork.h"
 #import "TLChannel.h"
 
+// NSView's default rightMouseDown: pops up menuForEvent:, so overriding it
+// here is the portable way to attach context menus to rows.
+@interface TLChannelOutlineView : NSOutlineView
+{
+	__unsafe_unretained id _menuOwner;
+}
+@property (nonatomic, assign) id menuOwner;
+@end
+
+@implementation TLChannelOutlineView
+@synthesize menuOwner = _menuOwner;
+
+- (NSMenu *)menuForEvent:(NSEvent *)event
+{
+	NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+	NSInteger row = [self rowAtPoint:point];
+	if (row < 0) {
+		return nil;
+	}
+	id item = [self itemAtRow:row];
+	if (![item isKindOfClass:[TLNetwork class]] &&
+		![item isKindOfClass:[TLChannel class]]) {
+		return nil;
+	}
+	if ([self selectedRow] != row &&
+		[item isKindOfClass:[TLChannel class]]) {
+		// Right-click selects, matching standard desktop behavior and the
+		// web client's context menu on the row under the cursor.
+		[self selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+			byExtendingSelection:NO];
+	}
+	TLNetworkOutlineView *owner = (TLNetworkOutlineView *)_menuOwner;
+	if (![owner.delegate respondsToSelector:
+			@selector(networkOutlineView:contextMenuForRowItem:)]) {
+		return nil;
+	}
+	return [owner.delegate networkOutlineView:owner contextMenuForRowItem:item];
+}
+
+@end
+
 @implementation TLNetworkOutlineView
 
 - (instancetype)initWithFrame:(NSRect)frame
@@ -25,8 +66,9 @@
 		[_scrollView setBorderType:NSBezelBorder];
 
 		NSSize contentSize = [_scrollView contentSize];
-		_outlineView = [[NSOutlineView alloc] initWithFrame:
+		_outlineView = [[TLChannelOutlineView alloc] initWithFrame:
 			NSMakeRect(0, 0, contentSize.width, contentSize.height)];
+		[(TLChannelOutlineView *)_outlineView setMenuOwner:self];
 		NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"channel"];
 		[column setWidth:contentSize.width];
 		[column setResizingMask:NSTableColumnAutoresizingMask];
@@ -125,10 +167,22 @@
 - (void)selectChannelId:(NSInteger)channelId
 {
 	_selectedChannelId = channelId;
-	NSInteger row = [self rowForChannelId:channelId];
+	NSInteger row;
+	if (_selectedItemIsNetworkRow) {
+		// The user clicked a network header; keep the highlight there while
+		// showing its lobby instead of jumping down to the lobby row.
+		TLNetwork *network = _serverState ?
+			[_serverState networkContainingChannel:channelId] : nil;
+		row = network ? [_outlineView rowForItem:network]
+			: [self rowForChannelId:channelId];
+	} else {
+		row = [self rowForChannelId:channelId];
+	}
 	if (row >= 0) {
-		[_outlineView selectRowIndexes:[NSIndexSet indexSetWithIndex:row]
-			byExtendingSelection:NO];
+		if ([_outlineView selectedRow] != row) {
+			[_outlineView selectRowIndexes:[NSIndexSet indexSetWithIndex:
+				(NSUInteger)row] byExtendingSelection:NO];
+		}
 	}
 }
 
@@ -212,8 +266,10 @@
 
 - (BOOL)outlineView:(NSOutlineView *)outline shouldSelectItem:(id)item
 {
-	// Network rows act as group headers and are not selectable.
-	return [item isKindOfClass:[TLChannel class]];
+	// Networks act as their own selection target so they can be chatted in
+	// (the lobby), not just expanded.
+	return [item isKindOfClass:[TLNetwork class]] ||
+		[item isKindOfClass:[TLChannel class]];
 }
 
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification
@@ -223,10 +279,17 @@
 		return;
 	}
 	id item = [_outlineView itemAtRow:row];
-	if (![item isKindOfClass:[TLChannel class]]) {
+	TLChannel *channel = nil;
+	if ([item isKindOfClass:[TLNetwork class]]) {
+		channel = [(TLNetwork *)item lobby];
+		_selectedItemIsNetworkRow = YES;
+	} else if ([item isKindOfClass:[TLChannel class]]) {
+		channel = item;
+		_selectedItemIsNetworkRow = NO;
+	}
+	if (!channel) {
 		return;
 	}
-	TLChannel *channel = item;
 	// Skip programmatic selections: they already set _selectedChannelId.
 	if (_selectedChannelId == channel.identifier) {
 		return;

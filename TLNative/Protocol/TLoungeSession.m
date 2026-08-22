@@ -230,6 +230,16 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	[self.protocol loadMoreHistoryForChannelId:channelId lastId:lastId];
 }
 
+- (void)clearHistoryForChannelId:(NSInteger)channelId
+{
+	[self.protocol clearHistoryForChannelId:channelId];
+}
+
+- (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId
+{
+	[self.protocol setMuted:muted forChannelId:channelId];
+}
+
 #pragma mark - TLSocketIOClientDelegate (network thread)
 
 - (void)socketIOClientDidConnect:(TLSocketIOClient *)client

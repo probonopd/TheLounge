@@ -128,6 +128,12 @@ NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChang
 	[self.socketClient emitEvent:@"history:clear" withArguments:@[@{@"target": @(channelId)}]];
 }
 
+- (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId
+{
+	[self.socketClient emitEvent:@"mute:change"
+		withArguments:@[@{@"target": @(channelId), @"setMutedTo": @(muted)}]];
+}
+
 - (BOOL)isAuthenticated
 {
 	return _isAuthenticated;

@@ -1,10 +1,10 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session
+TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session t_contextmenu
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework \
                       -I../Model -I../EngineIO -I../SocketIO -I../Protocol \
-                      -I../Support -I../WebSocket
+                      -I../Support -I../WebSocket -I../UI
 # Model properties intentionally mirror The Lounge wire field names
 # (newNick, newIdent, newHost, rawText) which trigger the Cocoa ownership
 # naming heuristic; the names are correct for this project.
@@ -32,6 +32,12 @@ t_session_OBJC_FILES = t_session.m $(PROTO_SRC) $(MODEL_SRC) $(SIO_SRC) $(EIO_SR
             ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
             ../SocketIO/TLSocketIOClient.m
 t_session_TOOL_LIBS += -lcurl
+
+# The context menu builder is AppKit code; NSMenu/NSMenuItem work headless.
+UI_SRC = ../UI/TLContextMenuBuilder.m
+
+t_contextmenu_OBJC_FILES = t_contextmenu.m $(UI_SRC) $(MODEL_SRC)
+t_contextmenu_TOOL_LIBS += -lgnustep-gui
 
 -include GNUmakefile.preamble
 include $(GNUSTEP_MAKEFILES)/test-tool.make

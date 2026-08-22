@@ -80,6 +80,7 @@
 	_userListView = [[TLUserListView alloc] initWithFrame:
 		NSMakeRect(0, 0, 150, splitHeight)];
 	[_userListView setAutoresizingMask:NSViewHeightSizable];
+	[_userListView setDelegate:self];
 
 	[_splitView addSubview:_networkOutline];
 	[_splitView addSubview:_messageView];
@@ -161,6 +162,9 @@
 	}
 	_selectedChannelId = channelId;
 	_loadingHistory = NO;
+	_autoHistoryBatches = 0;
+	[_selectedUserNick release];
+	_selectedUserNick = nil;
 	[_networkOutline setSelectedChannelId:channelId];
 	[_networkOutline selectChannelId:channelId];
 	[_session openChannelId:channelId];
@@ -181,6 +185,11 @@
 	[self updateHasMoreHistoryForChannelId:channel.identifier];
 	[_messageView scrollToBottom];
 	[_userListView reloadWithChannel:channel];
+	// The bouncer replays only messages newer than what this client last
+	// saw, so a quiet channel can start out shorter than the viewport -
+	// too short to ever reach the top by scrolling. Fetch older batches
+	// until the transcript is scrollable.
+	[self autoFillHistoryIfShortTranscript];
 }
 
 - (void)updateHasMoreHistoryForChannelId:(NSInteger)channelId
@@ -253,6 +262,9 @@
 			[_messageView prependMessages:channel.messages];
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
+		// A batch may still have left the transcript shorter than the
+		// viewport; keep going until scrolling becomes possible.
+		[self autoFillHistoryIfShortTranscript];
 	}
 	[self setWindowTitle];
 }
@@ -347,6 +359,14 @@
 
 - (void)messageViewDidScrollToTop:(TLMessageView *)messageView
 {
+	[self requestOlderHistoryForSelectedChannel];
+}
+
+// Asks the bouncer for one batch of messages older than the oldest one we
+// hold. Single-flight via _loadingHistory; a lost response clears the flag
+// after 10 seconds.
+- (void)requestOlderHistoryForSelectedChannel
+{
 	if (_loadingHistory) {
 		return;
 	}
@@ -370,6 +390,25 @@
 	[_session loadMoreHistoryForChannelId:channel.identifier lastId:firstMessage.identifier];
 }
 
+// Keeps requesting older batches while the transcript is too short to be
+// scrollable; otherwise reaching the top - and with it history loading -
+// would be impossible.
+- (void)autoFillHistoryIfShortTranscript
+{
+	if (!_messageView.hasMoreHistory || [_messageView contentFillsViewport]) {
+		return;
+	}
+	// Hard cap so a misbehaving server cannot keep us fetching forever.
+	if (_autoHistoryBatches >= 10) {
+		return;
+	}
+	if (_loadingHistory) {
+		return;
+	}
+	_autoHistoryBatches++;
+	[self requestOlderHistoryForSelectedChannel];
+}
+
 - (void)resetHistoryLoadingFlag
 {
 	_loadingHistory = NO;
@@ -380,6 +419,246 @@
 - (void)networkOutlineView:(TLNetworkOutlineView *)outline didSelectChannelId:(NSInteger)channelId
 {
 	[self selectChannelId:channelId];
+}
+
+- (NSMenu *)networkOutlineView:(TLNetworkOutlineView *)outline contextMenuForRowItem:(id)item
+{
+	TLNetwork *network = nil;
+	TLChannel *channel = nil;
+	if ([item isKindOfClass:[TLNetwork class]]) {
+		network = item;
+		channel = [network lobby];
+	} else if ([item isKindOfClass:[TLChannel class]]) {
+		channel = item;
+		network = [_session.serverState networkContainingChannel:channel.identifier];
+	}
+	if (!channel || !network) {
+		return nil;
+	}
+	NSString *myNick = _session.serverState.currentUserNick ?: network.nick;
+	return [TLContextMenuBuilder channelMenuForChannel:channel
+		network:network myNick:myNick delegate:self];
+}
+
+#pragma mark - TLUserListViewDelegate
+
+- (void)userListView:(TLUserListView *)view didSelectRow:(NSInteger)row
+{
+	[_selectedUserNick release];
+	_selectedUserNick = nil;
+	if (row < 0) {
+		return;
+	}
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (!channel) {
+		return;
+	}
+	NSArray *users = [channel sortedUsers];
+	if (row >= (NSInteger)[users count]) {
+		return;
+	}
+	_selectedUserNick = [[[users objectAtIndex:(NSUInteger)row] nick] copy];
+}
+
+- (NSMenu *)userListView:(TLUserListView *)view contextMenuForRow:(NSInteger)row
+{
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (!channel) {
+		return nil;
+	}
+	NSArray *users = [channel sortedUsers];
+	if (row < 0 || row >= (NSInteger)[users count]) {
+		return nil;
+	}
+	TLNetwork *network = [_session.serverState networkContainingChannel:channel.identifier];
+	if (!network) {
+		return nil;
+	}
+	NSString *myNick = _session.serverState.currentUserNick ?: network.nick;
+	return [TLContextMenuBuilder userMenuForUser:[users objectAtIndex:(NSUInteger)row]
+		channel:channel network:network myNick:myNick delegate:self];
+}
+
+#pragma mark - TLContextMenuActionDelegate
+
+- (void)contextMenuSwitchToChannelId:(NSInteger)channelId
+{
+	[self selectChannelId:channelId];
+}
+
+- (void)contextMenuRunCommand:(NSString *)command onChannelId:(NSInteger)channelId
+{
+	[_session sendCommand:command toChannelId:channelId];
+}
+
+- (void)contextMenuSetMuted:(BOOL)muted forChannelId:(NSInteger)channelId
+{
+	[_session setMuted:muted forChannelId:channelId];
+}
+
+- (void)contextMenuClearHistoryForChannelId:(NSInteger)channelId
+{
+	TLChannel *channel = [_session.serverState channelWithIdentifier:channelId];
+	NSString *name = channel.name ?: @"this channel";
+	if (![self confirmTitled:@"Clear history"
+		message:[NSString stringWithFormat:
+			@"Are you sure you want to clear history for %@? This cannot be undone.",
+			name]
+		button:@"Clear history"]) {
+		return;
+	}
+	[_session clearHistoryForChannelId:channelId];
+}
+
+- (void)contextMenuCloseChannelId:(NSInteger)channelId isLobby:(BOOL)isLobby
+{
+	if (isLobby) {
+		TLNetwork *network = [_session.serverState networkContainingChannel:channelId];
+		NSString *name = network.name ?: @"the network";
+		if (![self confirmTitled:@"Remove network"
+			message:[NSString stringWithFormat:
+				@"Are you sure you want to quit and remove %@? This cannot be undone.",
+				name]
+			button:@"Remove network"]) {
+			return;
+		}
+		[_session sendCommand:@"/quit" toChannelId:channelId];
+		return;
+	}
+	// The server-side /close parts channels and closes queries.
+	[_session sendCommand:@"/close" toChannelId:channelId];
+}
+
+- (void)contextMenuJoinPromptForLobbyId:(NSInteger)lobbyId
+{
+	NSString *name = [self runTextPromptTitled:@"Join a channel"
+		label:@"Channel name:" defaultValue:@""];
+	name = [name stringByTrimmingCharactersInSet:
+		[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if ([name length] == 0) {
+		return;
+	}
+	// The web client also accepts bare names; pass through unchanged and let
+	// the bouncer normalize the target.
+	[_session sendCommand:[@"/join " stringByAppendingString:name]
+		toChannelId:lobbyId];
+}
+
+- (void)contextMenuEditTopicForChannelId:(NSInteger)channelId
+{
+	TLChannel *channel = [_session.serverState channelWithIdentifier:channelId];
+	if (!channel) {
+		return;
+	}
+	NSString *topic = [self runTextPromptTitled:@"Edit topic"
+		label:[NSString stringWithFormat:@"Topic for %@:", channel.name]
+		defaultValue:channel.topic ?: @""];
+	topic = [topic stringByTrimmingCharactersInSet:
+		[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	if ([topic length] == 0) {
+		return;
+	}
+	[_session sendCommand:[NSString stringWithFormat:@"/topic %@", topic]
+		toChannelId:channelId];
+}
+
+#pragma mark - Context menu prompts
+
+- (BOOL)confirmTitled:(NSString *)title message:(NSString *)message
+	button:(NSString *)button
+{
+	NSAlert *alert = [[NSAlert alloc] init];
+	[alert setMessageText:title];
+	[alert setInformativeText:message];
+	[alert addButtonWithTitle:button];
+	[alert addButtonWithTitle:@"Cancel"];
+	NSInteger result = [alert runModal];
+	[alert release];
+	return result == NSAlertFirstButtonReturn;
+}
+
+- (void)textPromptConfirmed:(id)sender
+{
+	[NSApp stopModalWithCode:1];
+}
+
+- (void)textPromptCancelled:(id)sender
+{
+	[NSApp stopModalWithCode:0];
+}
+
+- (NSString *)runTextPromptTitled:(NSString *)title
+	label:(NSString *)label
+	defaultValue:(NSString *)defaultValue
+{
+	// GNUstep's NSAlert has no accessory views, so text prompts get their
+	// own small modal panel.
+	NSWindow *panel = [[NSWindow alloc]
+		initWithContentRect:NSMakeRect(0, 0, 320, 120)
+		styleMask:(NSTitledWindowMask | NSClosableWindowMask)
+		backing:NSBackingStoreBuffered defer:NO];
+	[panel setTitle:title];
+	[panel setReleasedWhenClosed:NO];
+	[panel center];
+
+	NSView *content = [panel contentView];
+	NSRect bounds = [content bounds];
+
+	BOOL hasLabel = [label length] > 0;
+	CGFloat inputY = hasLabel ? NSHeight(bounds) - 68 : NSHeight(bounds) - 40;
+
+	if (hasLabel) {
+		NSTextField *labelField = [[NSTextField alloc] initWithFrame:
+			NSMakeRect(16, NSHeight(bounds) - 36, NSWidth(bounds) - 32, 18)];
+		[labelField setEditable:NO];
+		[labelField setSelectable:NO];
+		[labelField setBordered:NO];
+		[labelField setBezeled:NO];
+		[labelField setDrawsBackground:NO];
+		[labelField setStringValue:label];
+		[content addSubview:labelField];
+		[labelField release];
+	}
+
+	NSTextField *input = [[NSTextField alloc] initWithFrame:
+		NSMakeRect(16, inputY, NSWidth(bounds) - 32, 24)];
+	[input setStringValue:defaultValue ?: @""];
+	[input setTarget:self];
+	[input setAction:@selector(textPromptConfirmed:)];
+	[content addSubview:input];
+
+	NSButton *cancelButton = [[NSButton alloc] initWithFrame:
+		NSMakeRect(NSWidth(bounds) - 140, 14, 60, 26)];
+	[cancelButton setTitle:@"Cancel"];
+	[cancelButton setButtonType:NSMomentaryLightButton];
+	[cancelButton setBezelStyle:NSRoundedBezelStyle];
+	[cancelButton setTarget:self];
+	[cancelButton setAction:@selector(textPromptCancelled:)];
+	[content addSubview:cancelButton];
+	[cancelButton release];
+
+	NSButton *okButton = [[NSButton alloc] initWithFrame:
+		NSMakeRect(NSWidth(bounds) - 74, 14, 58, 26)];
+	[okButton setTitle:@"OK"];
+	[okButton setButtonType:NSMomentaryLightButton];
+	[okButton setBezelStyle:NSRoundedBezelStyle];
+	[okButton setKeyEquivalent:@"\r"];
+	[okButton setTarget:self];
+	[okButton setAction:@selector(textPromptConfirmed:)];
+	[content addSubview:okButton];
+	[okButton release];
+
+	[[self window] addChildWindow:panel ordered:NSWindowAbove];
+	[panel makeKeyAndOrderFront:nil];
+	[panel makeFirstResponder:input];
+	NSString *value = nil;
+	if ([NSApp runModalForWindow:panel] == 1) {
+		value = [[input stringValue] retain];
+	}
+	[[self window] removeChildWindow:panel];
+	[panel orderOut:nil];
+	[panel release];
+	return [value autorelease];
 }
 
 #pragma mark - NSSplitViewDelegate
@@ -402,7 +681,283 @@
 	return proposedMax;
 }
 
-#pragma mark - NSWindowDelegate
+#pragma mark - Chat main-menu actions
+
+// The channel whose network-scoped commands apply: the selected channel's
+// lobby.  Falls back to the first network when nothing is selected.
+- (TLNetwork *)currentChatNetwork
+{
+	if (_selectedChannelId > 0) {
+		return [_session.serverState networkContainingChannel:_selectedChannelId];
+	}
+	TLServerState *state = _session.serverState;
+	return [state.networks count] > 0 ? [state.networks objectAtIndex:0] : nil;
+}
+
+- (TLChannel *)currentChatChannel
+{
+	return _selectedChannelId > 0
+		? [_session.serverState channelWithIdentifier:_selectedChannelId]
+		: nil;
+}
+
+- (TLUser *)selectedChatUserInChannel:(TLChannel *)channel
+{
+	if (!_selectedUserNick) {
+		return nil;
+	}
+	return [channel userWithNick:_selectedUserNick];
+}
+
+- (void)chatToggleConnection:(id)sender
+{
+	TLNetwork *network = [self currentChatNetwork];
+	if (!network) {
+		return;
+	}
+	NSString *command = network.connected ? @"/disconnect" : @"/connect";
+	[_session sendCommand:command toChannelId:[[network lobby] identifier]];
+}
+
+- (void)chatRemoveNetwork:(id)sender
+{
+	TLNetwork *network = [self currentChatNetwork];
+	if (network) {
+		[self contextMenuCloseChannelId:[[network lobby] identifier] isLobby:YES];
+	}
+}
+
+- (void)chatJoinChannel:(id)sender
+{
+	TLNetwork *network = [self currentChatNetwork];
+	if (network) {
+		[self contextMenuJoinPromptForLobbyId:[[network lobby] identifier]];
+	}
+}
+
+- (void)chatListChannels:(id)sender
+{
+	TLNetwork *network = [self currentChatNetwork];
+	if (network) {
+		[self contextMenuRunCommand:@"/list"
+			onChannelId:[[network lobby] identifier]];
+	}
+}
+
+- (void)chatListIgnoredUsers:(id)sender
+{
+	TLNetwork *network = [self currentChatNetwork];
+	if (network) {
+		[self contextMenuRunCommand:@"/ignorelist"
+			onChannelId:[[network lobby] identifier]];
+	}
+}
+
+- (void)chatListBannedUsers:(id)sender
+{
+	TLChannel *channel = [self currentChatChannel];
+	if ([channel isChannel]) {
+		[self contextMenuRunCommand:@"/banlist" onChannelId:channel.identifier];
+	}
+}
+
+- (void)chatEditTopic:(id)sender
+{
+	TLChannel *channel = [self currentChatChannel];
+	if ([channel isChannel]) {
+		[self contextMenuEditTopicForChannelId:channel.identifier];
+	}
+}
+
+- (void)chatClearHistory:(id)sender
+{
+	TLChannel *channel = [self currentChatChannel];
+	if (channel) {
+		[self contextMenuClearHistoryForChannelId:channel.identifier];
+	}
+}
+
+- (void)chatToggleMuted:(id)sender
+{
+	TLChannel *channel = [self currentChatChannel];
+	if (channel && channel.type != TLChannelTypeSpecial) {
+		[self contextMenuSetMuted:!channel.muted forChannelId:channel.identifier];
+	}
+}
+
+- (void)chatCloseCurrent:(id)sender
+{
+	TLChannel *channel = [self currentChatChannel];
+	if (channel) {
+		[self contextMenuCloseChannelId:channel.identifier
+			isLobby:(channel.type == TLChannelTypeLobby)];
+	}
+}
+
+- (NSString *)commandForSelectedUser:(NSString *)verb
+{
+	TLChannel *channel = [self currentChatChannel];
+	if (!channel || !_selectedUserNick) {
+		return nil;
+	}
+	return [NSString stringWithFormat:@"/%@ %@", verb, _selectedUserNick];
+}
+
+- (void)chatWhoisSelectedUser:(id)sender
+{
+	NSString *command = [self commandForSelectedUser:@"whois"];
+	if (command) {
+		[self contextMenuRunCommand:command onChannelId:_selectedChannelId];
+	}
+}
+
+- (void)chatIgnoreSelectedUser:(id)sender
+{
+	NSString *command = [self commandForSelectedUser:@"ignore"];
+	if (command) {
+		[self contextMenuRunCommand:command onChannelId:_selectedChannelId];
+	}
+}
+
+- (void)chatQuerySelectedUser:(id)sender
+{
+	NSString *command = [self commandForSelectedUser:@"query"];
+	if (command) {
+		[self contextMenuRunCommand:command onChannelId:_selectedChannelId];
+	}
+}
+
+- (void)chatKickSelectedUser:(id)sender
+{
+	NSString *command = [self commandForSelectedUser:@"kick"];
+	if (command) {
+		[self contextMenuRunCommand:command onChannelId:_selectedChannelId];
+	}
+}
+
+- (void)chatSetMode:(NSMenuItem *)sender
+{
+	NSDictionary *spec = [sender representedObject];
+	NSString *command = [NSString stringWithFormat:@"/mode %@%@ %@",
+		[spec[@"give"] boolValue] ? @"+" : @"-",
+		spec[@"mode"], _selectedUserNick];
+	[self contextMenuRunCommand:command onChannelId:_selectedChannelId];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)menuItem
+{
+	SEL action = [menuItem action];
+	TLChannel *channel = [self currentChatChannel];
+	TLNetwork *network = [self currentChatNetwork];
+
+	if (action == @selector(chatToggleConnection:)) {
+		[menuItem setTitle:network.connected ? @"Disconnect" : @"Connect"];
+		return network != nil;
+	}
+	if (action == @selector(chatRemoveNetwork:) ||
+		action == @selector(chatJoinChannel:) ||
+		action == @selector(chatListChannels:) ||
+		action == @selector(chatListIgnoredUsers:)) {
+		return network != nil;
+	}
+	if (action == @selector(chatListBannedUsers:) ||
+		action == @selector(chatEditTopic:)) {
+		return [channel isChannel];
+	}
+	if (action == @selector(chatClearHistory:)) {
+		return channel != nil &&
+			([channel isChannel] || [channel isQuery]);
+	}
+	if (action == @selector(chatToggleMuted:)) {
+		if (!channel || channel.type == TLChannelTypeSpecial) {
+			return NO;
+		}
+		NSString *type = [TLContextMenuBuilder humanTypeNameForChannel:channel];
+		[menuItem setTitle:[NSString stringWithFormat:
+			channel.muted ? @"Unmute %@" : @"Mute %@", type]];
+		return YES;
+	}
+	if (action == @selector(chatCloseCurrent:)) {
+		if (!channel) {
+			return NO;
+		}
+		switch (channel.type) {
+		case TLChannelTypeChannel:
+			[menuItem setTitle:@"Leave"];
+			break;
+		case TLChannelTypeLobby:
+			[menuItem setTitle:@"Leave Network"];
+			break;
+		default:
+			[menuItem setTitle:@"Close"];
+			break;
+		}
+		return YES;
+	}
+
+	BOOL userAction = (action == @selector(chatWhoisSelectedUser:) ||
+		action == @selector(chatIgnoreSelectedUser:) ||
+		action == @selector(chatQuerySelectedUser:) ||
+		action == @selector(chatKickSelectedUser:) ||
+		action == @selector(chatSetMode:));
+	if (userAction) {
+		if (!channel || !_selectedUserNick ||
+			[channel userWithNick:_selectedUserNick] == nil) {
+			return NO;
+		}
+		if (action != @selector(chatSetMode:)) {
+			[menuItem setTitle:[menuItem.title stringByReplacingOccurrencesOfString:
+				@"Selected User" withString:_selectedUserNick]];
+		}
+	}
+
+	if (action == @selector(chatKickSelectedUser:)) {
+		// Same eligibility rule as the context menu: at least half-op (or
+		// operator on servers without half-ops), target unranked or below.
+		TLUser *me = [channel userWithNick:_session.serverState.currentUserNick
+			?: [self currentChatNetwork].nick ?: @""];
+		TLUser *target = [self selectedChatUserInChannel:channel];
+		if (!me || [me.modes count] == 0 || !target) {
+			return NO;
+		}
+		NSDictionary *prefixOptions =
+			[[self currentChatNetwork] serverOptions][@"PREFIX"];
+		NSArray *symbols = prefixOptions[@"symbols"];
+		NSString *myTop = [me.modes objectAtIndex:0];
+		NSString *requirement = [symbols containsObject:@"%"] ? @"%" : @"@";
+		BOOL atLeastHalfOp = ![TLContextMenuBuilder mode:requirement
+			canActOnMode:myTop inSymbols:symbols];
+		BOOL targetBelowUs = ([target.modes count] == 0 ||
+			[TLContextMenuBuilder mode:myTop
+				canActOnMode:[target.modes objectAtIndex:0]
+				inSymbols:symbols]);
+		return atLeastHalfOp && targetBelowUs;
+	}
+
+	if (action == @selector(chatSetMode:)) {
+		TLUser *me = [channel userWithNick:_session.serverState.currentUserNick
+			?: [self currentChatNetwork].nick ?: @""];
+		TLUser *target = [self selectedChatUserInChannel:channel];
+		if (!me || [me.modes count] == 0 || !target) {
+			return NO;
+		}
+		NSDictionary *prefixOptions =
+			[[self currentChatNetwork] serverOptions][@"PREFIX"];
+		NSArray *symbols = prefixOptions[@"symbols"];
+		NSString *myTop = [me.modes objectAtIndex:0];
+		NSDictionary *spec = [menuItem representedObject];
+		NSString *symbol = spec[@"symbol"];
+		BOOL give = [spec[@"give"] boolValue];
+		BOOL rankOk = [TLContextMenuBuilder mode:myTop canActOnMode:symbol
+			inSymbols:symbols];
+		BOOL stateOk = give
+			? ![target.modes containsObject:symbol]
+			: [target.modes containsObject:symbol];
+		return rankOk && stateOk;
+	}
+
+	return YES;
+}
 
 - (BOOL)windowShouldClose:(id)sender
 {

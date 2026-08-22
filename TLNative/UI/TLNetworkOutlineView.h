@@ -11,6 +11,9 @@
 
 @protocol TLNetworkOutlineViewDelegate <NSObject>
 - (void)networkOutlineView:(TLNetworkOutlineView *)outline didSelectChannelId:(NSInteger)channelId;
+@optional
+// Returned menu is popped up at the mouse; item is a TLNetwork or TLChannel.
+- (NSMenu *)networkOutlineView:(TLNetworkOutlineView *)outline contextMenuForRowItem:(id)item;
 @end
 
 // The GNUstep data source/delegate protocols do not mark their optional
@@ -22,6 +25,7 @@
 	NSOutlineView *_outlineView;
 	TLServerState *_serverState;
 	NSInteger _selectedChannelId;
+	BOOL _selectedItemIsNetworkRow;
 	id<TLNetworkOutlineViewDelegate> _delegate;
 }
 

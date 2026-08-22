@@ -58,6 +58,15 @@ Implemented and covered by unit/parser-level tests:
 - Message types modeled: message, action, notice, join, part, quit, nick,
   topic, mode, mode_channel, mode_user, kick, invite, away, back, error,
   ctcp, whois, raw, wallops.
+- Context menus on channels/networks (sidebar) and users (user list) with
+  the same items as the The Lounge v4.5 web client: join prompt, list
+  channels/ignored/banned, disconnect/connect, edit topic, whois, ignore,
+  query/direct messages, clear history (with confirmation), mute/unmute,
+  leave/close/remove network (with confirmation), and operator actions
+  (give/revoke owner/admin/operator/half-op/voice, kick) gated by the same
+  prefix-rank rules as `generateUserContextMenu`. Not yet offered:
+  "Edit this network…" (needs a network editor UI and the network editing
+  protocol).
 
 ## Known unsupported features
 

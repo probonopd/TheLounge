@@ -32,4 +32,9 @@
 - (void)clear;
 - (void)scrollToBottom;
 
+// NO when the transcript is shorter than the visible area, so there is
+// nothing to scroll; callers use this to fetch older messages instead of
+// waiting for a scroll-to-top that can never happen.
+- (BOOL)contentFillsViewport;
+
 @end

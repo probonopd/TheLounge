@@ -89,6 +89,82 @@
 	// The empty View menu only confuses; drop it.
 	// Window menu keeps Minimize/Zoom and doubles as the windows list.
 
+	// Chat menu: mirrors the channel/user context menus.  Actions resolve
+	// through the responder chain to the key window's controller, whose
+	// validateMenuItem: enables them based on the current selection.
+	NSMenuItem *chatItem = [[NSMenuItem alloc] initWithTitle:@"Chat"
+		action:NULL keyEquivalent:@""];
+	NSMenu *chatMenu = [[NSMenu alloc] initWithTitle:@"Chat"];
+
+	[chatMenu addItemWithTitle:@"Connect"
+		action:@selector(chatToggleConnection:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Remove Network…"
+		action:@selector(chatRemoveNetwork:) keyEquivalent:@""];
+	[chatMenu addItem:[NSMenuItem separatorItem]];
+	[chatMenu addItemWithTitle:@"Join a Channel…"
+		action:@selector(chatJoinChannel:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"List All Channels"
+		action:@selector(chatListChannels:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"List Ignored Users"
+		action:@selector(chatListIgnoredUsers:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"List Banned Users"
+		action:@selector(chatListBannedUsers:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Edit Topic…"
+		action:@selector(chatEditTopic:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Clear History…"
+		action:@selector(chatClearHistory:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Mute Channel"
+		action:@selector(chatToggleMuted:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Leave"
+		action:@selector(chatCloseCurrent:) keyEquivalent:@""];
+	[chatMenu addItem:[NSMenuItem separatorItem]];
+	[chatMenu addItemWithTitle:@"User Information"
+		action:@selector(chatWhoisSelectedUser:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Ignore User"
+		action:@selector(chatIgnoreSelectedUser:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Direct Messages"
+		action:@selector(chatQuerySelectedUser:) keyEquivalent:@""];
+
+	NSMenuItem *operatorItem = [[NSMenuItem alloc] initWithTitle:@"Operator"
+		action:NULL keyEquivalent:@""];
+	NSMenu *operatorMenu = [[NSMenu alloc] initWithTitle:@"Operator"];
+	// Standard IRC ranks; items enable only when the server actually has the
+	// mode and our rank permits it (validated against PREFIX at use time).
+	NSArray *ranks = @[
+		@{@"mode": @"q", @"symbol": @"~", @"name": @"Owner"},
+		@{@"mode": @"a", @"symbol": @"&", @"name": @"Admin"},
+		@{@"mode": @"o", @"symbol": @"@", @"name": @"Operator"},
+		@{@"mode": @"h", @"symbol": @"%", @"name": @"Half-op"},
+		@{@"mode": @"v", @"symbol": @"+", @"name": @"Voice"}];
+	for (NSDictionary *rank in ranks) {
+		NSString *giveLabel = [NSString stringWithFormat:@"Give %@ (+%@)",
+			rank[@"name"], rank[@"mode"]];
+		NSMenuItem *give = (NSMenuItem *)[operatorMenu addItemWithTitle:giveLabel
+			action:@selector(chatSetMode:) keyEquivalent:@""];
+		[give setRepresentedObject:@{@"mode": rank[@"mode"],
+			@"symbol": rank[@"symbol"], @"give": @YES}];
+		NSString *revokeLabel = [NSString stringWithFormat:@"Revoke %@ (-%@)",
+			rank[@"name"], rank[@"mode"]];
+		NSMenuItem *revoke = (NSMenuItem *)[operatorMenu addItemWithTitle:revokeLabel
+			action:@selector(chatSetMode:) keyEquivalent:@""];
+		[revoke setRepresentedObject:@{@"mode": rank[@"mode"],
+			@"symbol": rank[@"symbol"], @"give": @NO}];
+	}
+	[operatorItem setSubmenu:operatorMenu];
+	[operatorMenu release];
+	// The item is not retained until its menu adopts it, so release only
+	// after it has been inserted.
+	[chatMenu addItem:operatorItem];
+	[operatorItem release];
+
+	[chatMenu addItemWithTitle:@"Kick"
+		action:@selector(chatKickSelectedUser:) keyEquivalent:@""];
+
+	[chatItem setSubmenu:chatMenu];
+	[mainMenu addItem:chatItem];
+	[chatMenu release];
+	[chatItem release];
+
 	NSMenuItem *windowItem = [[NSMenuItem alloc] initWithTitle:@"Window"
 		action:NULL keyEquivalent:@""];
 	NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];

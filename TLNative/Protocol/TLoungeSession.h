@@ -56,6 +56,8 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state);
 - (void)openChannelId:(NSInteger)channelId;
 - (void)requestNamesForChannelId:(NSInteger)channelId;
 - (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId;
+- (void)clearHistoryForChannelId:(NSInteger)channelId;
+- (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId;
 
 - (void)persistSessionToken:(NSString *)token;
 - (NSString *)retrieveStoredToken;
