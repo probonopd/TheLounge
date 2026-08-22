@@ -1,0 +1,8 @@
+{
+  "id": 2,
+  "users": [
+    {"mode": "o", "away": "", "nick": "alice", "lastMessage": 6},
+    {"mode": "v", "away": "", "nick": "bob", "lastMessage": 3},
+    {"mode": "", "away": "", "nick": "carol", "lastMessage": 4}
+  ]
+}

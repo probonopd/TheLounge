@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="0.9">
+<dict>
+	<key>CFBundleName</key>
+	<string>The Lounge</string>
+	<key>CFBundleDisplayName</key>
+	<string>The Lounge</string>
+	<key>ApplicationName</key>
+	<string>The Lounge</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.gershwin-desktop.TheLounge</string>
+	<key>CFBundleExecutable</key>
+	<string>TheLounge</string>
+	<key>CFBundleVersion</key>
+	<string>0.1.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleIconFile</key>
+	<string>TheLounge.png</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright (c) 2026 Simon Peter. All rights reserved.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

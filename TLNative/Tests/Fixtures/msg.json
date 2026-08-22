@@ -1,0 +1,14 @@
+{
+  "msg": {
+    "from": {"mode": "", "nick": "alice"},
+    "id": 6,
+    "text": "hello from alice",
+    "type": "message",
+    "self": false,
+    "time": "2025-06-01T12:05:00.000Z",
+    "highlight": true
+  },
+  "chan": 2,
+  "highlight": 1,
+  "unread": 2
+}

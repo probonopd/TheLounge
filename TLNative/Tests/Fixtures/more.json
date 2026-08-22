@@ -1,0 +1,22 @@
+{
+  "chan": 2,
+  "messages": [
+    {
+      "from": {"mode": "", "nick": "bob"},
+      "id": 3,
+      "text": "older message",
+      "type": "message",
+      "self": false,
+      "time": "2025-06-01T11:30:00.000Z"
+    },
+    {
+      "from": {"mode": "", "nick": "carol"},
+      "id": 4,
+      "text": "even older",
+      "type": "message",
+      "self": false,
+      "time": "2025-06-01T11:45:00.000Z"
+    }
+  ],
+  "totalMessages": 20
+}
