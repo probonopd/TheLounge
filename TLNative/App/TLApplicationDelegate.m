@@ -272,13 +272,6 @@
 	[_session disconnect];
 }
 
-// The desktop environment terminates applications when their last window
-// closes; this application manages its own window lifecycle instead.
-- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
-{
-	return NO;
-}
-
 - (TLoungeSession *)session
 {
 	return _session;
