@@ -10,7 +10,7 @@
 
 - (instancetype)init
 {
-	NSRect contentRect = NSMakeRect(0, 0, 420, 280);
+	NSRect contentRect = NSMakeRect(0, 0, 420, 220);
 	NSWindow *window = [[NSWindow alloc] initWithContentRect:contentRect
 		styleMask:(NSTitledWindowMask | NSClosableWindowMask)
 		backing:NSBackingStoreBuffered defer:NO];
@@ -28,11 +28,40 @@
 	return self;
 }
 
+// Lays out one labeled input row per the Gershwin appearance metrics:
+// right-aligned label column, 22px field, rows top-anchored with a 30px
+// rhythm (8px gap + 22px control).
+- (void)addRowWithLabel:(NSString *)title
+	field:(NSTextField *)field
+	toView:(NSView *)content
+	y:(CGFloat)y
+	width:(CGFloat)contentWidth
+{
+	const CGFloat labelWidth = 110.0;
+
+	NSTextField *label = [self labelWithTitle:title
+		frame:NSMakeRect(24.0, y + 3.0, labelWidth, 17.0)];
+	[label setAutoresizingMask:NSViewMinYMargin];
+	[content addSubview:label];
+
+	[field setFrame:NSMakeRect(24.0 + labelWidth + 8.0, y,
+		contentWidth - 2.0 * 24.0 - labelWidth - 8.0, 22.0)];
+	[field setAutoresizingMask:NSViewWidthSizable | NSViewMinYMargin];
+	[content addSubview:field];
+}
+
 - (void)buildContentViewForWindow:(NSWindow *)window
 {
 	NSView *contentView = [window contentView];
+	// GNUstep inflates the contentView by ~5px; laying out against the
+	// window's own content width keeps the side margins symmetric.
+	CGFloat width = NSWidth([window contentRectForFrameRect:[window frame]]);
+	const CGFloat sideMargin = 24.0;
+	const CGFloat bottomMargin = 12.0;
+	CGFloat y = NSHeight([window contentRectForFrameRect:[window frame]])
+	    - 15.0 - 22.0;
 
-	_serverField = [[NSTextField alloc] initWithFrame:NSMakeRect(115, 236, 285, 22)];
+	_serverField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 10, 22)];
 	NSString *savedURL = [[NSUserDefaults standardUserDefaults]
 		stringForKey:@"ServerURL"];
 	if ([savedURL length] > 0) {
@@ -41,28 +70,32 @@
 		[_serverField setStringValue:@"https://"];
 	}
 	[_serverField setPlaceholderString:@"https://lounge.example.com"];
-	[contentView addSubview:[self labelWithTitle:@"Server URL"
-		frame:NSMakeRect(20, 240, 90, 17)]];
-	[contentView addSubview:_serverField];
+	[self addRowWithLabel:@"Server URL" field:_serverField
+		toView:contentView y:y width:width];
+	y -= 30.0;
 
-	_usernameField = [[NSTextField alloc] initWithFrame:NSMakeRect(115, 204, 285, 22)];
+	_usernameField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 10, 22)];
 	NSString *savedUsername = [[NSUserDefaults standardUserDefaults]
 		stringForKey:@"Username"];
 	if ([savedUsername length] > 0) {
 		[_usernameField setStringValue:savedUsername];
 	}
-	[contentView addSubview:[self labelWithTitle:@"Username"
-		frame:NSMakeRect(20, 208, 90, 17)]];
-	[contentView addSubview:_usernameField];
+	[self addRowWithLabel:@"Username" field:_usernameField
+		toView:contentView y:y width:width];
+	y -= 30.0;
 
-	_passwordField = [[NSSecureTextField alloc] initWithFrame:NSMakeRect(115, 172, 285, 22)];
-	[contentView addSubview:[self labelWithTitle:@"Password"
-		frame:NSMakeRect(20, 176, 90, 17)]];
-	[contentView addSubview:_passwordField];
+	_passwordField = [[NSSecureTextField alloc] initWithFrame:
+		NSMakeRect(0, 0, 10, 22)];
+	[self addRowWithLabel:@"Password" field:_passwordField
+		toView:contentView y:y width:width];
+	y -= 12.0;
 
-	_rememberButton = [[NSButton alloc] initWithFrame:NSMakeRect(115, 142, 200, 18)];
+	_rememberButton = [[NSButton alloc] initWithFrame:
+		NSMakeRect(sideMargin + 110.0 + 8.0, y - 18.0,
+			NSWidth([contentView frame]) - sideMargin - 118.0, 18.0)];
 	[_rememberButton setButtonType:NSSwitchButton];
 	[_rememberButton setTitle:@"Remember me"];
+	[_rememberButton setAutoresizingMask:NSViewMinYMargin];
 	if ([[NSUserDefaults standardUserDefaults] objectForKey:@"RememberMe"] != nil) {
 		[_rememberButton setState:[[NSUserDefaults standardUserDefaults]
 			boolForKey:@"RememberMe"] ? NSOnState : NSOffState];
@@ -71,21 +104,27 @@
 	}
 	[contentView addSubview:_rememberButton];
 
-	_connectButton = [[NSButton alloc] initWithFrame:NSMakeRect(300, 96, 100, 26)];
+	_connectButton = [[NSButton alloc] initWithFrame:
+		NSMakeRect(width - sideMargin - 100.0,
+			bottomMargin + 16.0 + 12.0, 100.0, 20.0)];
 	[_connectButton setButtonType:NSMomentaryLightButton];
 	[_connectButton setBezelStyle:NSRoundedBezelStyle];
 	[_connectButton setTitle:@"Connect"];
 	[_connectButton setTarget:self];
 	[_connectButton setAction:@selector(connect:)];
 	[_connectButton setKeyEquivalent:@"\r"];
+	[_connectButton setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
 	[contentView addSubview:_connectButton];
 
-	_statusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 24, 380, 16)];
+	_statusLabel = [[NSTextField alloc] initWithFrame:
+		NSMakeRect(sideMargin, bottomMargin,
+			width - 2.0 * sideMargin, 16.0)];
 	[_statusLabel setEditable:NO];
 	[_statusLabel setSelectable:NO];
 	[_statusLabel setBezeled:NO];
 	[_statusLabel setDrawsBackground:NO];
 	[_statusLabel setTextColor:[NSColor colorWithCalibratedWhite:0.30 alpha:1.0]];
+	[_statusLabel setAutoresizingMask:NSViewMaxYMargin | NSViewWidthSizable];
 	[contentView addSubview:_statusLabel];
 }
 
