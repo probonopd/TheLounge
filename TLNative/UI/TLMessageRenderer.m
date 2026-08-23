@@ -8,6 +8,8 @@
 #import "TLMessage.h"
 #import "TLLinkDetector.h"
 
+#import <string.h>
+
 static NSColor *TLDefaultTextColor(void)
 {
 	// The message surface follows the light system theme, so body text
@@ -352,6 +354,26 @@ static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItal
 		return TLDefaultTextColor();
 	}
 	return [TLNickColorPalette() objectAtIndex:(TLNickHash(nick) % [TLNickColorPalette() count])];
+}
+
++ (NSString *)initialForNick:(NSString *)nick
+{
+	if (!nick || [nick length] == 0) {
+		return @"?";
+	}
+	// Mode prefixes are list decoration, not part of the name.
+	NSUInteger start = 0;
+	while (start < [nick length] &&
+	    strchr("@+~&%", [nick characterAtIndex:start]) != NULL) {
+		start++;
+	}
+	if (start >= [nick length]) {
+		return @"?";
+	}
+	// Take a whole composed character sequence so surrogate pairs and
+	// accented letters survive the cut intact.
+	NSRange unit = [nick rangeOfComposedCharacterSequenceAtIndex:start];
+	return [[nick substringWithRange:unit] uppercaseString];
 }
 
 + (NSAttributedString *)attributedStringForNick:(NSString *)nick mode:(NSString *)mode

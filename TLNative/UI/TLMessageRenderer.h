@@ -31,6 +31,8 @@
 
 // Deterministic, stable color derived from the nick.
 + (NSColor *)colorForNick:(NSString *)nick;
+// First display character of the name, for avatar monograms.
++ (NSString *)initialForNick:(NSString *)nick;
 
 // The font used for message text.
 + (NSFont *)baseFont;

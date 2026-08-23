@@ -158,7 +158,7 @@
 	[[TLMessageRenderer colorForNick:key] setFill];
 	[[NSBezierPath bezierPathWithOvalInRect:
 		NSInsetRect(NSMakeRect(0, 0, side, side), 1.0, 1.0)] fill];
-	NSString *initial = [[key substringToIndex:1] uppercaseString];
+	NSString *initial = [TLMessageRenderer initialForNick:key];
 	NSDictionary *attrs = [NSDictionary dictionaryWithObject:
 		[NSFont boldSystemFontOfSize:15.0] forKey:NSFontAttributeName];
 	NSSize textSize = [initial sizeWithAttributes:attrs];

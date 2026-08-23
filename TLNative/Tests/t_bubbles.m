@@ -260,6 +260,19 @@ int main(void)
 		[channel release];
 	}
 
+	// --- Renderer: nick initials -----------------------------------------
+	{
+		PASS([[TLMessageRenderer initialForNick:@"alice"] isEqual:@"A"],
+			"initial is the first character of the name");
+		PASS([[TLMessageRenderer initialForNick:@"+bob"] isEqual:@"B"],
+			"mode prefixes do not become the initial");
+		PASS([[TLMessageRenderer initialForNick:@""] isEqual:@"?"],
+			"empty name falls back to a placeholder");
+		NSString *accented = [TLMessageRenderer initialForNick:@"\u00E9mile"];
+		PASS([accented isEqual:@"\u00C9"],
+			"composed accented characters stay intact");
+	}
+
 	// --- Renderer: bubble body ------------------------------------------
 	{
 		TLUser *sender = [[TLUser alloc] init];

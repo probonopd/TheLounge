@@ -72,6 +72,28 @@ static NSColor *TLPlaceholderColorForName(NSString *name)
 	                                  alpha:1.0];
 }
 
+// Character ranges carrying NSLinkAttributeName; cursor rects must match
+// exactly what the link hit-tester would resolve on click.
+static NSArray *TLLinkRangesInAttributedString(NSAttributedString *string)
+{
+	NSMutableArray *ranges = [NSMutableArray array];
+	NSUInteger length = [string length];
+	NSUInteger i = 0;
+	while (i < length) {
+		NSRange range;
+		id link = [string attribute:NSLinkAttributeName
+		                    atIndex:i
+		              effectiveRange:&range];
+		if (link != nil) {
+			[ranges addObject:[NSValue valueWithRange:range]];
+			i = NSMaxRange(range);
+		} else {
+			i++;
+		}
+	}
+	return ranges;
+}
+
 static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 {
 	NSColor *ca = [a colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
@@ -154,6 +176,41 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	// Top-down layout matches reading order, and the AppKit text system
 	// anchors attributed-string drawing at the rect top in flipped views.
 	return YES;
+}
+
+// Finger cursor over speaker pictures and over the exact glyph runs that
+// mouseDown would resolve to a link.
+- (void)resetCursorRects
+{
+	NSCursor *hand = [NSCursor pointingHandCursor];
+	for (TLBubbleCell *cell in _cells) {
+		if (!NSIsEmptyRect(cell->_avatarRect)) {
+			[self addCursorRect:cell->_avatarRect cursor:hand];
+		}
+
+		NSAttributedString *string = [self displayStringForMessage:cell->_message];
+		NSArray *ranges = TLLinkRangesInAttributedString(string);
+		if ([ranges count] == 0 || cell->_textMeasureWidth <= 0.0) {
+			continue;
+		}
+		// Lay the string out exactly the way measuring and drawing do so
+		// the hover region sits on the visible glyphs, line breaks included.
+		[_textStorage setAttributedString:string];
+		[_textContainer setContainerSize:NSMakeSize(cell->_textMeasureWidth, FLT_MAX)];
+		[_layoutManager ensureLayoutForTextContainer:_textContainer];
+		for (NSValue *value in ranges) {
+			NSRange chars = [value rangeValue];
+			NSRange glyphs = [_layoutManager glyphRangeForCharacterRange:chars
+			 actualCharacterRange:NULL];
+			NSRect rect = [_layoutManager boundingRectForGlyphRange:glyphs
+			                                   inTextContainer:_textContainer];
+			// The container origin coincides with where the string is
+			// drawn: the text rect's top-left corner in this flipped view.
+			rect.origin.x += NSMinX(cell->_textRect);
+			rect.origin.y += NSMinY(cell->_textRect);
+			[self addCursorRect:NSInsetRect(rect, -1.0, -1.0) cursor:hand];
+		}
+	}
 }
 
 #pragma mark Public API
@@ -518,6 +575,10 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 		[self setFrameSize:NSMakeSize(width, newHeight)];
 	}
 	[self setNeedsDisplay:YES];
+	// Hover regions must follow the relaid-out cells immediately.
+	if ([self window] != nil) {
+		[[self window] invalidateCursorRectsForView:self];
+	}
 
 	if (_pendingScrollToBottom) {
 		_pendingScrollToBottom = NO;
@@ -743,10 +804,14 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 
 	NSImage *avatar = cell->_avatar;
 	if (avatar != nil) {
+		// respectFlipped keeps the picture upright in this flipped view;
+		// without it letters in the avatar come out mirrored.
 		[avatar drawInRect:avatarRect
 		           fromRect:NSZeroRect
 		          operation:NSCompositeSourceOver
-		           fraction:1.0];
+		           fraction:1.0
+		     respectFlipped:YES
+		              hints:nil];
 	} else {
 		NSColor *fill = TLPlaceholderColorForName(
 		    cell->_senderName ?: @"?");
