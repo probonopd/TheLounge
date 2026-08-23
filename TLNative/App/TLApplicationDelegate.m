@@ -325,8 +325,10 @@
 	BOOL quiet = _autoConnectAttempt;
 	_autoConnectAttempt = NO;
 	if (quiet) {
-		[self tearDownMainInterface];
+		// The replacement window must exist before the old one closes,
+		// or the last-window-closed check would terminate the app.
 		[self showLoginWindow];
+		[self tearDownMainInterface];
 		return;
 	}
 
@@ -355,8 +357,10 @@
 			break;
 	}
 	[self showAlertWithTitle:title detail:message hint:hint];
-	[self tearDownMainInterface];
+	// Same ordering as above: open the login window before the chat
+	// window goes away so the app never hits last-window-closed.
 	[self showLoginWindow];
+	[self tearDownMainInterface];
 }
 
 - (void)showAlertWithTitle:(NSString *)title detail:(NSString *)detail hint:(NSString *)hint
@@ -374,11 +378,12 @@
 	[alert release];
 }
 
-// The desktop environment terminates applications when their last window
-// closes; this application manages its own window lifecycle instead.
+// Quitting with the last closed window keeps the desktop tidy; the
+// window transitions inside this app always order a replacement window
+// on screen before its predecessor closes.
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
 {
-	return NO;
+	return YES;
 }
 
 - (void)showMainInterface
