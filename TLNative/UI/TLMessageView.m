@@ -335,6 +335,13 @@
 	[self openLink:url];
 }
 
+- (void)transcriptViewDidSelectSender:(NSString *)senderName
+{
+	if ([_delegate respondsToSelector:@selector(messageView:didSelectSenderNick:)]) {
+		[_delegate messageView:self didSelectSenderNick:senderName];
+	}
+}
+
 #pragma mark - Scrolling
 
 - (CGFloat)documentHeight

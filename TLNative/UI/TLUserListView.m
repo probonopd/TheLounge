@@ -104,6 +104,29 @@
 	}
 }
 
+- (NSInteger)selectedUserRow
+{
+	return [_tableView selectedRow];
+}
+
+- (BOOL)selectUserWithNick:(NSString *)nick
+{
+	if (!_channel || [nick length] == 0) {
+		return NO;
+	}
+	NSInteger row = 0;
+	for (TLUser *user in _channel.sortedUsers) {
+		if ([user.nick isEqualToString:nick]) {
+			[_tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)row]
+			       byExtendingSelection:NO];
+			[_tableView scrollRowToVisible:row];
+			return YES;
+		}
+		row++;
+	}
+	return NO;
+}
+
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView
 {
 	return _channel ? (NSInteger)[_channel.sortedUsers count] : 0;

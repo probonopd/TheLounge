@@ -26,7 +26,11 @@
 }
 
 @property (nonatomic, assign) id<TLUserListViewDelegate> delegate;
+@property (nonatomic, readonly) NSInteger selectedUserRow;
 
 - (void)reloadWithChannel:(TLChannel *)channel;
+// Selects and reveals the row of the given nick; NO when that user is not
+// in the current channel.
+- (BOOL)selectUserWithNick:(NSString *)nick;
 
 @end

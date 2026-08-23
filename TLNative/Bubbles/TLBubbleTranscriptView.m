@@ -263,12 +263,22 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 }
 
 // Finds a link under the click by re-measuring only the cell the click
-// landed in; points outside any text never open anything.
+// landed in; points outside any text never open anything. A click on the
+// speaker picture selects that participant instead.
 - (void)mouseDown:(NSEvent *)event
 {
 	NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
 
 	for (TLBubbleCell *cell in [_cells reverseObjectEnumerator]) {
+		if (NSPointInRect(point, cell->_avatarRect)) {
+			NSString *name = cell->_senderName;
+			if ([name length] > 0 &&
+			    [_delegate respondsToSelector:
+			        @selector(transcriptViewDidSelectSender:)]) {
+				[_delegate transcriptViewDidSelectSender:name];
+			}
+			break;
+		}
 		if (!NSPointInRect(point, cell->_textRect)) {
 			continue;
 		}
@@ -537,61 +547,83 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 
 #pragma mark Drawing
 
-// Rounded rectangle assembled from OpenStep-era arc primitives; the tail is
-// part of the same closed contour so translucent fills never show seams.
+// Rounded rectangle assembled from OpenStep-era arc primitives; the callout
+// grows out of the side facing the speaker picture. The two corners on that
+// side are much squarer than the rest so the compact nub sits on a proper
+// straight edge instead of bulging out of a fully rounded cap.
 - (NSBezierPath *)balloonPathInRect:(NSRect)r
                        cornerRadius:(CGFloat)corner
-                        withTail:(BOOL)withTail
-                         tailLeft:(BOOL)tailLeft
+                           withTail:(BOOL)withTail
+                           tailLeft:(BOOL)tailLeft
 {
-	CGFloat radius = corner;
-	radius = MIN(radius, r.size.width / 2.0);
-	radius = MIN(radius, r.size.height / 2.0);
+	CGFloat near = withTail ? MIN(corner, 4.0) : corner;
+	CGFloat far = corner;
+	CGFloat rTL = tailLeft ? near : far;
+	CGFloat rTR = tailLeft ? far : near;
+	CGFloat rBR = tailLeft ? far : near;
+	CGFloat rBL = tailLeft ? near : far;
+
+	CGFloat minHalf = MIN(r.size.width, r.size.height) / 2.0;
+	rTL = MIN(rTL, minHalf);
+	rTR = MIN(rTR, minHalf);
+	rBR = MIN(rBR, minHalf);
+	rBL = MIN(rBL, minHalf);
 
 	CGFloat left = NSMinX(r);
 	CGFloat right = NSMaxX(r);
 	CGFloat top = NSMinY(r);
 	CGFloat bottom = NSMaxY(r);
 
-	NSBezierPath *path = [NSBezierPath bezierPath];
-	[path moveToPoint:NSMakePoint(left + radius, top)];
-	[path lineToPoint:NSMakePoint(right - radius, top)];
+	// Callout geometry shared by both edges: a compact triangle anchored
+	// near the vertical center of the avatar beside the bubble's top.
+	CGFloat tailLen = MIN(_theme.tailLength, r.size.width / 2.0);
+	CGFloat tailHalf = MIN(_theme.tailWidth, r.size.height / 2.0) * 0.5;
+	CGFloat bandLo = top + near;
+	CGFloat bandHi = bottom - near;
+	CGFloat tailCy = MIN(MAX(top + _theme.avatarSide * 0.45,
+	    bandLo + tailHalf), bandHi - tailHalf);
+	if (bandHi - bandLo < 2.0 * tailHalf) {
+		tailCy = (top + bottom) / 2.0;
+	}
 
-	[path appendBezierPathWithArcWithCenter:NSMakePoint(right - radius, top + radius)
-	                                 radius:radius
+	NSBezierPath *path = [NSBezierPath bezierPath];
+	[path moveToPoint:NSMakePoint(left + rTL, top)];
+	[path lineToPoint:NSMakePoint(right - rTR, top)];
+
+	[path appendBezierPathWithArcWithCenter:NSMakePoint(right - rTR, top + rTR)
+	                                 radius:rTR
 	                              startAngle:270.0
 	                                endAngle:360.0];
-	[path lineToPoint:NSMakePoint(right, bottom - radius)];
-	[path appendBezierPathWithArcWithCenter:NSMakePoint(right - radius, bottom - radius)
-	                                 radius:radius
+
+	// Right edge towards the bottom, interrupted by the callout when the
+	// picture hangs on the right.
+	if (withTail && !tailLeft) {
+		[path lineToPoint:NSMakePoint(right, tailCy - tailHalf)];
+		[path lineToPoint:NSMakePoint(right + tailLen, tailCy)];
+		[path lineToPoint:NSMakePoint(right, tailCy + tailHalf)];
+	}
+	[path lineToPoint:NSMakePoint(right, bottom - rBR)];
+	[path appendBezierPathWithArcWithCenter:NSMakePoint(right - rBR, bottom - rBR)
+	                                 radius:rBR
 	                              startAngle:0.0
 	                                endAngle:90.0];
 
-	// Bottom edge, interrupted by the tail notch near the speaker side.
-	if (withTail) {
-		CGFloat tailLength = MIN(_theme.tailLength, r.size.height);
-		CGFloat tailWidth = MIN(_theme.tailWidth, r.size.width / 3.0);
-		if (tailLeft) {
-			CGFloat xNear = left + radius + tailWidth;
-			[path lineToPoint:NSMakePoint(xNear, bottom)];
-			[path lineToPoint:NSMakePoint(left + radius + 1.0, bottom + tailLength)];
-			[path lineToPoint:NSMakePoint(left + radius, bottom)];
-		} else {
-			CGFloat xNear = right - radius - tailWidth;
-			[path lineToPoint:NSMakePoint(xNear, bottom)];
-			[path lineToPoint:NSMakePoint(right - radius - 1.0, bottom + tailLength)];
-			[path lineToPoint:NSMakePoint(right - radius, bottom)];
-		}
-	}
-
-	[path lineToPoint:NSMakePoint(left + radius, bottom)];
-	[path appendBezierPathWithArcWithCenter:NSMakePoint(left + radius, bottom - radius)
-	                                 radius:radius
+	[path lineToPoint:NSMakePoint(left + rBL, bottom)];
+	[path appendBezierPathWithArcWithCenter:NSMakePoint(left + rBL, bottom - rBL)
+	                                 radius:rBL
 	                              startAngle:90.0
 	                                endAngle:180.0];
-	[path lineToPoint:NSMakePoint(left, top + radius)];
-	[path appendBezierPathWithArcWithCenter:NSMakePoint(left + radius, top + radius)
-	                                 radius:radius
+
+	// Left edge towards the top, interrupted by the callout when the
+	// picture hangs on the left.
+	if (withTail && tailLeft) {
+		[path lineToPoint:NSMakePoint(left, tailCy + tailHalf)];
+		[path lineToPoint:NSMakePoint(left - tailLen, tailCy)];
+		[path lineToPoint:NSMakePoint(left, tailCy - tailHalf)];
+	}
+	[path lineToPoint:NSMakePoint(left, top + rTL)];
+	[path appendBezierPathWithArcWithCenter:NSMakePoint(left + rTL, top + rTL)
+	                                 radius:rTL
 	                              startAngle:180.0
 	                                endAngle:270.0];
 	[path closePath];

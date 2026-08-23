@@ -521,6 +521,13 @@
 	_selectedUserNick = [[[users objectAtIndex:(NSUInteger)row] nick] copy];
 }
 
+- (void)messageView:(TLMessageView *)messageView didSelectSenderNick:(NSString *)nick
+{
+	// Clicking a speaker picture behaves like clicking that user's row:
+	// the selection change keeps every Chat-menu action in sync.
+	[_userListView selectUserWithNick:nick];
+}
+
 - (NSMenu *)userListView:(TLUserListView *)view contextMenuForRow:(NSInteger)row
 {
 	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];

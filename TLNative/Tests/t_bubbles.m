@@ -20,6 +20,40 @@
 #import "TLMessageRenderer.h"
 #import "TLPreferencesController.h"
 #import "TLLinkDetector.h"
+#import "TLUserListView.h"
+#import "TLMessageView.h"
+#import "TLChannel.h"
+
+// The silhouette builder is private to the view; declaring the category
+// here just lets the test call it.
+@interface TLBubbleTranscriptView (TailTesting)
+- (NSBezierPath *)balloonPathInRect:(NSRect)r cornerRadius:(CGFloat)corner
+                           withTail:(BOOL)withTail tailLeft:(BOOL)tailLeft;
+@end
+
+// The sender-forwarding hop inside the message view is likewise private.
+@interface TLMessageView (SenderTesting)
+- (void)transcriptViewDidSelectSender:(NSString *)senderName;
+@end
+
+static NSInteger g_lastSeenRow = -99;
+static NSString *g_lastSeenNick = nil;
+
+@interface RowRecorder : NSObject <TLUserListViewDelegate, TLMessageViewDelegate>
+@end
+
+@implementation RowRecorder
+- (void)userListView:(TLUserListView *)view didSelectRow:(NSInteger)row
+{
+	g_lastSeenRow = row;
+}
+- (void)messageViewDidScrollToTop:(TLMessageView *)messageView {}
+- (void)messageView:(TLMessageView *)messageView didSelectSenderNick:(NSString *)nick
+{
+	[g_lastSeenNick release];
+	g_lastSeenNick = [nick copy];
+}
+@end
 
 int main(void)
 {
@@ -137,6 +171,93 @@ int main(void)
 		[tv clearMessages];
 		PASS([tv messageCount] == 0, "clearMessages empties the transcript");
 		[tv release];
+	}
+
+	// --- Balloon callout geometry ----------------------------------------
+	{
+		TLBubbleTranscriptView *tv = [[TLBubbleTranscriptView alloc]
+			initWithFrame:NSMakeRect(0, 0, 400, 300) theme:nil];
+		NSRect br = NSMakeRect(60.0, 100.0, 90.0, 28.0);
+
+		NSBezierPath *left = [tv balloonPathInRect:br cornerRadius:11.0
+		                                  withTail:YES tailLeft:YES];
+		PASS([left containsPoint:NSMakePoint(NSMinX(br) - 4.5, NSMinY(br) + 16.0)],
+			"callout protrudes on the avatar side (left)");
+		PASS(![left containsPoint:NSMakePoint(NSMaxX(br) + 4.5, NSMinY(br) + 16.0)],
+			"no callout on the far side of a left-tailed balloon");
+		PASS(![left containsPoint:NSMakePoint(
+		    NSMidX(br), NSMinY(br) - 4.0)],
+			"callout no longer hangs off the bottom edge");
+
+		NSBezierPath *right = [tv balloonPathInRect:br cornerRadius:11.0
+		                                   withTail:YES tailLeft:NO];
+		PASS([right containsPoint:NSMakePoint(NSMaxX(br) + 4.5, NSMinY(br) + 16.0)],
+			"callout protrudes on the avatar side (right)");
+
+		NSBezierPath *plain = [tv balloonPathInRect:br cornerRadius:11.0
+		                                   withTail:NO tailLeft:YES];
+		PASS(![plain containsPoint:NSMakePoint(NSMinX(br) - 4.5, NSMinY(br) + 16.0)],
+			"tailless balloon does not protrude");
+
+		// On a tall balloon the nub must sit in the upper half, where the
+		// avatar hangs; on short pills every point borders the picture.
+		NSRect tall = NSMakeRect(60.0, 100.0, 90.0, 60.0);
+		NSBezierPath *tallRight = [tv balloonPathInRect:tall cornerRadius:11.0
+		                                       withTail:YES tailLeft:NO];
+		BOOL upper = NO;
+		BOOL lower = NO;
+		for (CGFloat y = NSMinY(tall); y < NSMaxY(tall); y += 1.0) {
+			if ([tallRight containsPoint:NSMakePoint(NSMaxX(tall) + 3.0, y)]) {
+				if (y < NSMidY(tall)) {
+					upper = YES;
+				} else {
+					lower = YES;
+				}
+			}
+		}
+		PASS(upper && !lower, "callout points at the avatar's height");
+		[tv release];
+	}
+
+	// --- Avatar click selects the speaker in the user list ---------------
+	{
+		TLChannel *channel = [[TLChannel alloc] initWithDictionary:@{
+			@"id": @2, @"name": @"#sel", @"type": @"channel", @"state": @1,
+			@"messages": @[] }];
+		[channel addUser:[[TLUser alloc] initWithDictionary:
+		    @{@"nick": @"alice", @"mode": @"o", @"away": @""}]];
+		[channel addUser:[[TLUser alloc] initWithDictionary:
+		    @{@"nick": @"bob", @"mode": @"v", @"away": @""}]];
+		[channel addUser:[[TLUser alloc] initWithDictionary:
+		    @{@"nick": @"carol", @"mode": @"", @"away": @""}]];
+
+		TLUserListView *list = [[TLUserListView alloc]
+			initWithFrame:NSMakeRect(0, 0, 120, 200)];
+		RowRecorder *rec = [[RowRecorder alloc] init];
+		g_lastSeenRow = -99;
+		[list setDelegate:rec];
+		[list reloadWithChannel:channel];
+		PASS([list selectedUserRow] == -1, "nothing selected after reload");
+
+		PASS([list selectUserWithNick:@"bob"], "selectUserWithNick finds bob");
+		PASS([list selectedUserRow] == 1, "bob's row became selected");
+		PASS(g_lastSeenRow == 1, "selection change reached the delegate");
+		PASS(![list selectUserWithNick:@"zed"], "unknown nick is not selectable");
+
+		TLMessageView *mv = [[TLMessageView alloc]
+			initWithFrame:NSMakeRect(0, 0, 300, 200)];
+		if (![mv usesBubbles]) {
+			[mv setUsesBubbles:YES];
+		}
+		[mv setDelegate:rec];
+		[mv transcriptViewDidSelectSender:@"bob"];
+		PASS([g_lastSeenNick isEqualToString:@"bob"],
+			"sender selection forwarded to the message view delegate");
+
+		[mv release];
+		[rec release];
+		[list release];
+		[channel release];
 	}
 
 	// --- Renderer: bubble body ------------------------------------------

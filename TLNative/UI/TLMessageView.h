@@ -12,6 +12,9 @@
 
 @protocol TLMessageViewDelegate <NSObject>
 - (void)messageViewDidScrollToTop:(TLMessageView *)messageView;
+@optional
+// Bubble style only: the user clicked a speaker picture in the transcript.
+- (void)messageView:(TLMessageView *)messageView didSelectSenderNick:(NSString *)nick;
 @end
 
 // Channel transcript container. Renders either the classic text log or the

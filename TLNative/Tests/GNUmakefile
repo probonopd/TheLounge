@@ -45,7 +45,8 @@ BUBBLE_SRC = ../Bubbles/TLBubbleMessage.m ../Bubbles/TLBubbleTheme.m \
 
 # The transcript view is AppKit code; NSView/NSTextStorage work headless.
 t_bubbles_OBJC_FILES = t_bubbles.m $(BUBBLE_SRC) ../UI/TLMessageRenderer.m \
-            ../UI/TLLinkDetector.m ../Support/TLPreferences.m $(MODEL_SRC)
+            ../UI/TLLinkDetector.m ../UI/TLUserListView.m ../UI/TLMessageView.m \
+            ../Support/TLPreferences.m $(MODEL_SRC)
 t_bubbles_TOOL_LIBS += -lgnustep-gui
 
 -include GNUmakefile.preamble

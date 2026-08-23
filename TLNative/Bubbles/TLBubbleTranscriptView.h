@@ -13,6 +13,8 @@
 @protocol TLBubbleTranscriptViewDelegate <NSObject>
 @optional
 - (void)transcriptViewDidActivateLink:(NSURL *)url;
+// The user clicked a speaker picture; senderName is the nick shown there.
+- (void)transcriptViewDidSelectSender:(NSString *)senderName;
 @end
 
 // Scrollable transcript of speech balloons. Incoming messages hug the left
