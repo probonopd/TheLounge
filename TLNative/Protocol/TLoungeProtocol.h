@@ -55,6 +55,9 @@ extern NSString *const TLLoungeHistoryDidChangeNotification;
 
 - (void)setUsername:(NSString *)username password:(NSString *)password;
 - (void)setUsername:(NSString *)username token:(NSString *)token;
+/* Replaces the pending credentials with a token obtained from the server,
+ * so reconnects resume the session instead of replaying the password. */
+- (void)adoptSessionToken:(NSString *)token;
 
 - (void)performAuthentication;
 

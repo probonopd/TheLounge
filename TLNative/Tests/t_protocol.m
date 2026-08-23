@@ -332,6 +332,53 @@ int main(void)
 		[protocol release]; [state release]; [clientState release]; [client release];
 	}
 
+	/* --- reconnect re-authentication after a disconnect --- */
+	{
+		RecordingClient *client = [[RecordingClient alloc] init];
+		TLServerState *state = [[TLServerState alloc] init];
+		TLClientState *clientState = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *protocol = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:client serverState:state clientState:clientState];
+
+		/* First login with a password; init hands out a session token. */
+		[protocol setUsername:@"testuser" password:@"secret"];
+		[protocol.dispatcher dispatchEvent:@"auth:start" arguments:@[@(123)]];
+		[protocol.dispatcher dispatchEvent:@"init" arguments:@[LoadFixture(@"init.json")]];
+		[client.emitted removeAllObjects];
+
+		/* Connection drops; resetSession runs and the automatic
+		 * reconnect reaches auth:start again. */
+		[protocol resetSession];
+		[protocol.dispatcher dispatchEvent:@"auth:start" arguments:@[@(456)]];
+
+		NSDictionary *reAuth = LastEvent(client);
+		PASS([reAuth[@"event"] isEqualToString:@"auth:perform"], "re-auth emitted after reset");
+		NSDictionary *rePayload = reAuth[@"args"][0];
+		PASS([rePayload[@"user"] isEqualToString:@"testuser"], "reconnect auth user kept");
+		PASS([rePayload[@"token"] isEqualToString:@"a1b2c3d4e5f6"],
+			"reconnect uses session token from init");
+		PASS(rePayload[@"password"] == nil, "password not replayed once token exists");
+		PASS([rePayload[@"lastMessage"] integerValue] == 5, "reconnect auth carries lastMessage");
+
+		[protocol release]; [state release]; [clientState release]; [client release];
+
+		/* Without a token in init the original password must still be
+		 * available for the reconnect. */
+		RecordingClient *client2 = [[RecordingClient alloc] init];
+		TLServerState *state2 = [[TLServerState alloc] init];
+		TLClientState *clientState2 = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *protocol2 = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:client2 serverState:state2 clientState:clientState2];
+		[protocol2 setUsername:@"testuser" password:@"secret"];
+		[protocol2 resetSession];
+		[protocol2.dispatcher dispatchEvent:@"auth:start" arguments:@[@(1)]];
+
+		NSDictionary *pwPayload = LastEvent(client2)[@"args"][0];
+		PASS([pwPayload[@"password"] isEqualToString:@"secret"], "password survives resetSession");
+
+		[protocol2 release]; [state2 release]; [clientState2 release]; [client2 release];
+	}
+
 	[arp release];
 	return 0;
 }

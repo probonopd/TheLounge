@@ -65,10 +65,9 @@ NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChang
 {
 	_isAuthenticated = NO;
 	_isReady = NO;
-	[_pendingToken release];
-	_pendingToken = [@"" copy];
-	[_pendingPassword release];
-	_pendingPassword = [@"" copy];
+	// Credentials are deliberately kept: the automatic reconnect must be
+	// able to re-authenticate. This object is discarded together with its
+	// credentials whenever the user starts a new login anyway.
 }
 
 - (void)setUsername:(NSString *)username password:(NSString *)password
@@ -87,6 +86,14 @@ NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChang
 	_pendingUsername = [username ? username : @"" copy];
 	[_pendingToken release];
 	_pendingToken = [token ? token : @"" copy];
+	[_pendingPassword release];
+	_pendingPassword = [@"" copy];
+}
+
+- (void)adoptSessionToken:(NSString *)token
+{
+	[_pendingToken release];
+	_pendingToken = [token copy];
 	[_pendingPassword release];
 	_pendingPassword = [@"" copy];
 }

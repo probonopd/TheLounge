@@ -351,6 +351,11 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 - (void)protocol:(TLoungeProtocol *)protocol authenticationFailedWithError:(NSError *)error
 {
+	// A rejected stored token cannot recover on its own; drop it so the
+	// next login falls back to the password the user types.
+	if ([_password length] == 0 && [_sessionToken length] > 0) {
+		[self clearStoredToken];
+	}
 	[self setState:TLConnectionStateAuthenticationFailed];
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeSessionErrorNotification

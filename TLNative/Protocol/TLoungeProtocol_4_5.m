@@ -331,6 +331,10 @@
 	// Retain any session token for fast re-authentication after reconnect.
 	if (newState.metadata[@"token"]) {
 		self.serverState.metadata[@"token"] = newState.metadata[@"token"];
+		// Promote the fresh token over the login credentials so the next
+		// auth:perform resumes the session (token + lastMessage) instead
+		// of replaying the raw password.
+		[self adoptSessionToken:newState.metadata[@"token"]];
 	}
 
 	[self updateCurrentUserNick];

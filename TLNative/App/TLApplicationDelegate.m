@@ -16,6 +16,9 @@
 	TLLoginController *_loginController;
 	TLMainWindowController *_mainWindowController;
 	TLPreferencesController *_preferencesController;
+	// Set while the launch-time token restore is in flight; its failures
+	// must open the login window quietly instead of alarming the user.
+	BOOL _autoConnectAttempt;
 }
 - (void)showAlertWithTitle:(NSString *)title detail:(NSString *)detail hint:(NSString *)hint;
 @end
@@ -35,7 +38,40 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
 	[self buildMainMenu];
-	[self showLoginWindow];
+	if (![self connectWithStoredToken]) {
+		[self showLoginWindow];
+	}
+}
+
+// Restores the last session directly from the stored token so a healthy
+// login skips the dialog entirely; returns NO when that is not possible
+// and the login window must be shown instead.
+- (BOOL)connectWithStoredToken
+{
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	NSString *serverText = [defaults stringForKey:@"ServerURL"];
+	NSString *username = [defaults stringForKey:@"Username"];
+	NSURL *serverURL = [NSURL URLWithString:serverText ?: @""];
+	if ([username length] == 0 || !serverURL || [[serverURL host] length] == 0) {
+		return NO;
+	}
+
+	TLoungeSession *session = [[TLoungeSession alloc]
+		initWithServerURL:serverURL username:username];
+	NSString *storedToken = [session retrieveStoredToken];
+	if ([storedToken length] == 0) {
+		[session release];
+		return NO;
+	}
+
+	[_session release];
+	_session = session;
+	[_session setSessionToken:storedToken];
+	[self registerSessionObservers];
+
+	_autoConnectAttempt = YES;
+	[_session connect];
+	return YES;
 }
 
 - (void)buildMainMenu
@@ -223,14 +259,25 @@
 	[_session release];
 	_session = [[TLoungeSession alloc] initWithServerURL:serverURL username:username];
 
+	// A typed password is authoritative: the server can invalidate stored
+	// tokens at any time (logout elsewhere, storage reset), and silently
+	// preferring the token would reject even correct passwords.
 	NSString *storedToken = [_session retrieveStoredToken];
-	if ([storedToken length] > 0) {
-		[_session setSessionToken:storedToken];
-	} else {
+	if ([password length] > 0 || [storedToken length] == 0) {
 		[_session setPassword:password];
-		[_session setRemember:remember];
+	} else {
+		[_session setSessionToken:storedToken];
 	}
+	[_session setRemember:remember];
 
+	[self registerSessionObservers];
+
+	[controller setStatusText:@"Connecting..."];
+	[_session connect];
+}
+
+- (void)registerSessionObservers
+{
 	NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
 	[center addObserver:self selector:@selector(sessionStateDidChange:)
 		name:TLLoungeSessionStateDidChangeNotification object:_session];
@@ -238,9 +285,6 @@
 		name:TLLoungeSessionDidBecomeReadyNotification object:_session];
 	[center addObserver:self selector:@selector(sessionDidFailWithError:)
 		name:TLLoungeSessionErrorNotification object:_session];
-
-	[controller setStatusText:@"Connecting..."];
-	[_session connect];
 }
 
 #pragma mark - Session notifications
@@ -250,6 +294,7 @@
 	if (notification.object != _session) {
 		return;
 	}
+	_autoConnectAttempt = NO;
 	[self showMainInterface];
 }
 
@@ -259,6 +304,7 @@
 		return;
 	}
 	if (_session.state == TLConnectionStateReady) {
+		_autoConnectAttempt = NO;
 		[self showMainInterface];
 	}
 }
@@ -272,6 +318,16 @@
 	NSString *message = [error localizedDescription];
 	if ([message length] == 0) {
 		message = @"The connection to the server failed.";
+	}
+
+	// A failed launch-time token restore is not worth an alert; the login
+	// window opens pre-filled and explains the situation on its own.
+	BOOL quiet = _autoConnectAttempt;
+	_autoConnectAttempt = NO;
+	if (quiet) {
+		[self tearDownMainInterface];
+		[self showLoginWindow];
+		return;
 	}
 
 	if ([notification.userInfo[@"recoverable"] boolValue]) {
