@@ -74,6 +74,9 @@ TLMessageType TLMessageTypeFromString(NSString *s);
 
 - (BOOL)isAction;
 - (BOOL)isSystemMessage;
+// Named accessor for the wire's "self" flag; the property name collides
+// with -self from NSObject.
+- (BOOL)isSelf;
 - (NSString *)displayText;
 
 @end

@@ -18,6 +18,10 @@
 @property (nonatomic, assign) BOOL outgoing;
 @property (nonatomic, retain) NSImage *avatar;
 
+// Status lines (joins, parts, mode changes) render as bare text across the
+// transcript width instead of a balloon plus avatar.
+@property (nonatomic, assign) BOOL plainLine;
+
 + (instancetype)messageWithText:(NSString *)text
                      senderName:(NSString *)senderName
                        outgoing:(BOOL)outgoing;

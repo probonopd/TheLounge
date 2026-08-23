@@ -6,6 +6,7 @@
 
 #import "TLMessageRenderer.h"
 #import "TLMessage.h"
+#import "TLLinkDetector.h"
 
 static NSColor *TLDefaultTextColor(void)
 {
@@ -372,7 +373,7 @@ static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItal
 	return TLParseFormattedText(text, NO, TLDefaultTextColor());
 }
 
-+ (NSAttributedString *)attributedStringForMessage:(TLMessage *)message
++ (NSAttributedString *)rawAttributedStringForMessage:(TLMessage *)message
 {
 	if (!message) {
 		return [[[NSAttributedString alloc] initWithString:@""] autorelease];
@@ -431,6 +432,84 @@ static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItal
 	}
 	[line appendAttributedString:TLParseFormattedText(display, NO, TLDefaultTextColor())];
 	return [line autorelease];
+}
+
+// Public line renderer: raw output plus clickable link decoration.
++ (NSAttributedString *)attributedStringForMessage:(TLMessage *)message
+{
+	return [TLLinkDetector attributedStringWithLinksApplied:
+	    [self rawAttributedStringForMessage:message]];
+}
+
+// Raw bubble body without link decoration; see the public method below.
++ (NSAttributedString *)bubbleBodyWithoutLinksOfMessage:(TLMessage *)message
+{
+	if (!message) {
+		return [[[NSAttributedString alloc] initWithString:@""] autorelease];
+	}
+	if ([message isSystemMessage]) {
+		NSString *text = [message displayText];
+		if (!text || [text length] == 0) {
+			text = [message text];
+		}
+		if (!text) {
+			text = @"";
+		}
+		NSColor *gray = [NSColor colorWithCalibratedWhite:0.30 alpha:1.0];
+		return TLParseFormattedText(text, NO, gray);
+	}
+	if ([message isAction]) {
+		NSMutableAttributedString *line = [[NSMutableAttributedString alloc] init];
+		NSDictionary *italicAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
+			TLFontFor(NO, YES), NSFontAttributeName,
+			TLDefaultTextColor(), NSForegroundColorAttributeName,
+			nil];
+		[line appendAttributedString:[[[NSAttributedString alloc] initWithString:@"* " attributes:italicAttrs] autorelease]];
+		if (message.sender) {
+			NSString *nick = message.sender.nick ? message.sender.nick : @"";
+			NSDictionary *nickAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
+				TLFontFor(NO, YES), NSFontAttributeName,
+				[self colorForNick:nick], NSForegroundColorAttributeName,
+				nil];
+			[line appendAttributedString:[[[NSAttributedString alloc] initWithString:nick attributes:nickAttrs] autorelease]];
+			[line appendAttributedString:[[[NSAttributedString alloc] initWithString:@" " attributes:italicAttrs] autorelease]];
+		}
+		NSString *text = [message text];
+		if (text && [text length] > 0) {
+			[line appendAttributedString:TLParseFormattedText(text, YES, TLDefaultTextColor())];
+		}
+		return [line autorelease];
+	}
+
+	// Regular chat: small muted timestamp, then the formatted body. The
+	// balloon itself already tells the reader who is speaking.
+	NSDate *timestamp = message.timestamp ? message.timestamp : [NSDate date];
+	NSDictionary *timeAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
+		[NSFont systemFontOfSize:10.0], NSFontAttributeName,
+		[NSColor colorWithCalibratedWhite:0.45 alpha:1.0],
+			NSForegroundColorAttributeName,
+		nil];
+	NSMutableAttributedString *line = [[NSMutableAttributedString alloc] init];
+	[line appendAttributedString:
+		[[[NSAttributedString alloc]
+			initWithString:TLTimeString(timestamp) attributes:timeAttrs]
+			autorelease]];
+	[line appendAttributedString:
+		[[[NSAttributedString alloc] initWithString:@"  " attributes:timeAttrs]
+			autorelease]];
+	NSString *display = [message displayText];
+	if (!display) {
+		display = @"";
+	}
+	[line appendAttributedString:TLParseFormattedText(display, NO, TLDefaultTextColor())];
+	return [line autorelease];
+}
+
+// Public bubble body: raw output plus clickable link decoration.
++ (NSAttributedString *)attributedStringForBubbleBodyOfMessage:(TLMessage *)message
+{
+	return [TLLinkDetector attributedStringWithLinksApplied:
+	    [self bubbleBodyWithoutLinksOfMessage:message]];
 }
 
 @end

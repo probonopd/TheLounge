@@ -8,12 +8,14 @@
 
 #import "TLoungeSession.h"
 #import "TLMainWindowController.h"
+#import "TLPreferencesController.h"
 
 @interface TLApplicationDelegate ()
 {
 	TLoungeSession *_session;
 	TLLoginController *_loginController;
 	TLMainWindowController *_mainWindowController;
+	TLPreferencesController *_preferencesController;
 }
 - (void)showAlertWithTitle:(NSString *)title detail:(NSString *)detail hint:(NSString *)hint;
 @end
@@ -26,6 +28,7 @@
 	[_session release];
 	[_loginController release];
 	[_mainWindowController release];
+	[_preferencesController release];
 	[super dealloc];
 }
 
@@ -52,6 +55,9 @@
 		action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
 	[appMenu addItemWithTitle:@"Show All"
 		action:@selector(unhideAllApplications:) keyEquivalent:@""];
+	[appMenu addItem:[NSMenuItem separatorItem]];
+	[appMenu addItemWithTitle:@"Preferences…"
+		action:@selector(showPreferences:) keyEquivalent:@","];
 	[appMenu addItem:[NSMenuItem separatorItem]];
 	[appMenu addItemWithTitle:@"Quit The Lounge"
 		action:@selector(terminate:) keyEquivalent:@"q"];
@@ -193,6 +199,16 @@
 	[_loginController prepareForRetry];
 	[_loginController showWindow:self];
 	[[_loginController window] makeKeyAndOrderFront:self];
+	[NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)showPreferences:(id)sender
+{
+	if (!_preferencesController) {
+		_preferencesController = [[TLPreferencesController alloc] init];
+	}
+	[_preferencesController showWindow:self];
+	[[_preferencesController window] makeKeyAndOrderFront:self];
 	[NSApp activateIgnoringOtherApps:YES];
 }
 

@@ -16,6 +16,12 @@
 // where applicable. Applies IRC formatting to the text.
 + (NSAttributedString *)attributedStringForMessage:(TLMessage *)message;
 
+// Bubble-style variant: the balloon body only. Authorship is conveyed by the
+// transcript layout (side, avatar), so regular messages carry a small
+// timestamp and the formatted text but no "nick:" prefix; system lines keep
+// their plain display text; actions render as "* nick did something".
++ (NSAttributedString *)attributedStringForBubbleBodyOfMessage:(TLMessage *)message;
+
 // Applies IRC formatting (bold, italic, underline, strikethrough, colors,
 // reverse, reset) to raw text. The input is not modified.
 + (NSAttributedString *)attributedStringForText:(NSString *)text;

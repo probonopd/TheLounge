@@ -1,10 +1,11 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
-TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session t_contextmenu
+TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session t_contextmenu \
+                 t_bubbles
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework \
-                      -I../Model -I../EngineIO -I../SocketIO -I../Protocol \
-                      -I../Support -I../WebSocket -I../UI
+                       -I../Model -I../EngineIO -I../SocketIO -I../Protocol \
+                       -I../Support -I../WebSocket -I../UI -I../Bubbles
 # Model properties intentionally mirror The Lounge wire field names
 # (newNick, newIdent, newHost, rawText) which trigger the Cocoa ownership
 # naming heuristic; the names are correct for this project.
@@ -38,6 +39,14 @@ UI_SRC = ../UI/TLContextMenuBuilder.m
 
 t_contextmenu_OBJC_FILES = t_contextmenu.m $(UI_SRC) $(MODEL_SRC)
 t_contextmenu_TOOL_LIBS += -lgnustep-gui
+
+BUBBLE_SRC = ../Bubbles/TLBubbleMessage.m ../Bubbles/TLBubbleTheme.m \
+             ../Bubbles/TLBubbleTranscriptView.m
+
+# The transcript view is AppKit code; NSView/NSTextStorage work headless.
+t_bubbles_OBJC_FILES = t_bubbles.m $(BUBBLE_SRC) ../UI/TLMessageRenderer.m \
+            ../UI/TLLinkDetector.m ../Support/TLPreferences.m $(MODEL_SRC)
+t_bubbles_TOOL_LIBS += -lgnustep-gui
 
 -include GNUmakefile.preamble
 include $(GNUSTEP_MAKEFILES)/test-tool.make

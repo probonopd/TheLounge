@@ -101,9 +101,29 @@
 	return [label autorelease];
 }
 
-- (IBAction)connect:(id)sender
+// The cursor belongs in the first field the user still has to fill in;
+// the bare scheme template in the server field counts as "to be filled".
+- (void)focusFirstEmptyField
 {
-	NSString *serverText = [[_serverField stringValue]
+	NSArray *fields = [NSArray arrayWithObjects:
+	    _serverField, _usernameField, _passwordField, nil];
+	for (NSTextField *field in fields) {
+		NSString *value = [field stringValue];
+		if ([value length] == 0 || [value isEqualToString:@"https://"]) {
+			[[self window] makeFirstResponder:field];
+			return;
+		}
+	}
+}
+
+- (void)showWindow:(id)sender
+{
+	[super showWindow:sender];
+	[self focusFirstEmptyField];
+}
+
+- (IBAction)connect:(id)sender
+{	NSString *serverText = [[_serverField stringValue]
 		stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	if ([serverText length] == 0) {
 		[self setStatusText:@"Please enter the server URL."];
@@ -159,6 +179,7 @@
 	[_connectButton setEnabled:YES];
 	[self setStatusText:@""];
 	[_passwordField setStringValue:@""];
+	[self focusFirstEmptyField];
 }
 
 - (void)dealloc

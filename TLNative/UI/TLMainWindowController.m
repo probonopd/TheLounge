@@ -12,6 +12,7 @@
 #import "TLChannel.h"
 #import "TLMessage.h"
 #import "TLUser.h"
+#import "TLPreferences.h"
 
 @implementation TLMainWindowController
 
@@ -135,6 +136,8 @@
 		name:TLLoungeHistoryDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(sessionStateDidChange:)
 		name:TLLoungeSessionStateDidChangeNotification object:_session];
+	[center addObserver:self selector:@selector(bubbleStyleDidChange:)
+		name:TLBubbleStyleDidChangeNotification object:nil];
 }
 
 - (TLoungeSession *)session
@@ -165,6 +168,9 @@
 	_autoHistoryBatches = 0;
 	[_selectedUserNick release];
 	_selectedUserNick = nil;
+	// Remember the open tab for the next visit to this server.
+	TLPreferencesSetLastChannelId(channelId, channel.name,
+	    _session.serverURLString);
 	[_networkOutline setSelectedChannelId:channelId];
 	[_networkOutline selectChannelId:channelId];
 	[_session openChannelId:channelId];
@@ -213,6 +219,39 @@
 		for (TLChannel *channel in network.channels) {
 			if (channel.state == TLChannelStateJoined) {
 				return channel;
+			}
+		}
+	}
+	return nil;
+}
+
+// The tab that was open on this server last time, matched by identifier
+// first and by name second; identifiers are server-assigned and can change.
+- (TLChannel *)storedChannelInServerState:(TLServerState *)serverState
+{
+	NSDictionary *saved =
+	    TLPreferencesLastChannelForServer(_session.serverURLString);
+	if (saved == nil) {
+		return nil;
+	}
+	NSInteger storedId = [saved[@"id"] integerValue];
+	NSString *name = saved[@"name"];
+	if (storedId > 0) {
+		TLChannel *byId = [serverState channelWithIdentifier:storedId];
+		if (byId) {
+			return byId;
+		}
+	}
+	if ([name length] > 0) {
+		for (TLNetwork *network in serverState.networks) {
+			TLChannel *lobby = [network lobby];
+			if ([lobby.name isEqualToString:name]) {
+				return lobby;
+			}
+			for (TLChannel *channel in network.channels) {
+				if ([channel.name isEqualToString:name]) {
+					return channel;
+				}
 			}
 		}
 	}
@@ -289,12 +328,34 @@
 	[_statusLabel setStringValue:TLConnectionStateDisplayString(_session.state)];
 }
 
+// Rebuilds the transcript in the newly selected style; the current channel
+// is repopulated from server state, so nothing is lost.
+- (void)bubbleStyleDidChange:(NSNotification *)notification
+{
+	BOOL bubbles = TLPreferencesUseBubbles();
+	if ([_messageView usesBubbles] == bubbles) {
+		return;
+	}
+	[_messageView setUsesBubbles:bubbles];
+	TLChannel *channel =
+		[_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (channel) {
+		[self populateViewsForChannel:channel];
+	}
+}
+
 - (void)ensureSelectedChannelPopulated
 {
 	TLServerState *serverState = _session.serverState;
 	TLChannel *channel = nil;
 	if (_selectedChannelId > 0) {
 		channel = [serverState channelWithIdentifier:_selectedChannelId];
+	}
+	// The stored tab is only consulted until the first successful
+	// selection; afterwards the user drives.
+	if (!channel && !_attemptedStoredChannelRestore) {
+		_attemptedStoredChannelRestore = YES;
+		channel = [self storedChannelInServerState:serverState];
 	}
 	if (!channel) {
 		channel = [self defaultChannelInServerState:serverState];

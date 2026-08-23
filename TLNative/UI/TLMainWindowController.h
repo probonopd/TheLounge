@@ -28,6 +28,9 @@
 	NSInteger _selectedChannelId;
 	NSString *_selectedUserNick;
 	BOOL _loadingHistory;
+	// The stored-tab restore is tried once per connection; afterwards the
+	// user's own selections win.
+	BOOL _attemptedStoredChannelRestore;
 	// Bounds how many history batches are fetched automatically to fill a
 	// transcript shorter than the viewport; guards against a server that
 	// keeps reporting more messages than it actually sends.

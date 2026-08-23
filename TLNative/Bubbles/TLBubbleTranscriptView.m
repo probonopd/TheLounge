@@ -8,6 +8,7 @@
 
 #import "TLBubbleMessage.h"
 #import "TLBubbleTheme.h"
+#import "TLLinkDetector.h"
 
 #import <math.h>
 #import <float.h>
@@ -23,6 +24,10 @@
 	NSRect _bubbleRect;
 	NSRect _textRect;
 	NSRect _avatarRect;
+	// Width actually used when measuring the text during layout; link
+	// hit-testing must re-measure with exactly this width or wrapping can
+	// differ and character indices shift.
+	CGFloat _textMeasureWidth;
 	BOOL _outgoing;
 	BOOL _isTyping;
 }
@@ -91,6 +96,8 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	BOOL _typingOutgoing;
 	BOOL _typingVisible;
 
+	BOOL _autoScrollsToBottom;
+
 	TLBubbleTheme *_theme;
 
 	// Set when content arrives; consumed at the end of the next relayout so
@@ -113,6 +120,7 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	if (self) {
 		_messages = [[NSMutableArray alloc] init];
 		_cells = [[NSMutableArray alloc] init];
+		_autoScrollsToBottom = YES;
 
 		_theme = [(theme ?: [TLBubbleTheme defaultTheme]) copy];
 
@@ -156,7 +164,7 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 		return;
 	}
 	[_messages addObject:message];
-	_pendingScrollToBottom = YES;
+	_pendingScrollToBottom = _autoScrollsToBottom;
 	[self relayout];
 }
 
@@ -166,8 +174,46 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 		return;
 	}
 	[_messages addObjectsFromArray:messages];
-	_pendingScrollToBottom = YES;
+	_pendingScrollToBottom = _autoScrollsToBottom;
 	[self relayout];
+}
+
+- (void)prependMessages:(NSArray *)messages
+{
+	if ([messages count] == 0) {
+		return;
+	}
+	NSScrollView *scrollView = [self enclosingScrollView];
+	CGFloat oldOriginY = scrollView != nil
+	    ? [[scrollView contentView] bounds].origin.y
+	    : 0.0;
+	CGFloat oldHeight = _laidOutHeight;
+
+	[_messages replaceObjectsInRange:NSMakeRange(0, 0)
+	                   withObjectsFromArray:messages];
+
+	// Unlike append, loading history must not yank the reader to the end.
+	_pendingScrollToBottom = NO;
+	[self relayout];
+
+	// Shift the viewport down by the grown amount so the entry the user was
+	// reading stays put and the fetched batch appears above it.
+	CGFloat addedHeight = _laidOutHeight - oldHeight;
+	if (addedHeight > 0.0 && scrollView && oldHeight > 0.0) {
+		NSPoint newOrigin = [[scrollView contentView] bounds].origin;
+		newOrigin.y = oldOriginY + addedHeight;
+		[[scrollView contentView] scrollToPoint:newOrigin];
+	}
+}
+
+- (NSArray *)messages
+{
+	return [[_messages copy] autorelease];
+}
+
+- (NSUInteger)messageCount
+{
+	return [_messages count];
 }
 
 - (void)clearMessages
@@ -214,6 +260,32 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	// Flipped view: the newest content lives at the largest y.
 	NSRect target = NSMakeRect(0.0, [self frame].size.height - 2.0, 1.0, 1.0);
 	[self scrollRectToVisible:target];
+}
+
+// Finds a link under the click by re-measuring only the cell the click
+// landed in; points outside any text never open anything.
+- (void)mouseDown:(NSEvent *)event
+{
+	NSPoint point = [self convertPoint:[event locationInWindow] fromView:nil];
+
+	for (TLBubbleCell *cell in [_cells reverseObjectEnumerator]) {
+		if (!NSPointInRect(point, cell->_textRect)) {
+			continue;
+		}
+		NSPoint textPoint = NSMakePoint(
+		    point.x - NSMinX(cell->_textRect),
+		    point.y - NSMinY(cell->_textRect));
+		NSURL *url = [TLLinkDetector linkAtPoint:textPoint
+		                                  inString:
+		                   [self displayStringForMessage:cell->_message]
+		                                    width:cell->_textMeasureWidth];
+		if (url != nil &&
+		    [_delegate respondsToSelector:@selector(transcriptViewDidActivateLink:)]) {
+			[_delegate transcriptViewDidActivateLink:url];
+			break;
+		}
+	}
+	[super mouseDown:event];
 }
 
 #pragma mark Layout
@@ -270,13 +342,30 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	if (isTyping) {
 		// Small transient cloud, deliberately lighter-weight than a sent
 		// balloon so it never reads as a message.
+		cell->_textMeasureWidth = 0.0;
 		CGFloat h = floor(t.avatarSide * 0.52);
 		CGFloat w = floor(t.avatarSide * 1.45);
 		bubbleRect = NSMakeRect(0.0, top, w, h);
 		cellHeight = h;
+	} else if ([message plainLine]) {
+		// Status text spans the transcript width; no balloon, no avatar.
+		NSAttributedString *string = [self displayStringForMessage:message];
+		CGFloat availWidth = width - 2.0 * inset;
+		NSSize ideal = [self measureString:string width:availWidth];
+		cell->_textMeasureWidth = availWidth;
+		CGFloat textWidth = MIN(ideal.width, availWidth);
+		CGFloat cellW = availWidth;
+		CGFloat cellH = ideal.height + 2.0 * t.paddingV;
+		bubbleRect = NSMakeRect(inset, top, cellW, cellH);
+		textRect = NSMakeRect(inset, top + t.paddingV, textWidth, ideal.height);
+		cellHeight = cellH;
 	} else {
 		NSAttributedString *string = [self displayStringForMessage:message];
 		NSSize ideal = [self measureString:string width:usableWidth];
+		cell->_textMeasureWidth =
+		    (ideal.width > usableWidth || ideal.width <= 0.0)
+		        ? usableWidth
+		        : ideal.width;
 		CGFloat textWidth = ideal.width;
 		CGFloat textHeight = ideal.height;
 		if (ideal.width > usableWidth || ideal.width <= 0.0) {
@@ -298,20 +387,26 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 
 	// Horizontal placement: picture in the margin on the speaker's side,
 	// balloon filling towards the opposite side.
-	CGFloat avatarX = cell->_outgoing
-	    ? width - inset - t.avatarSide
-	    : inset;
-	CGFloat bubbleX = cell->_outgoing
-	    ? avatarX - t.avatarGap - bubbleRect.size.width
-	    : inset + t.avatarSide + t.avatarGap;
-
-	cell->_bubbleRect = NSMakeRect(bubbleX, top,
-	                               bubbleRect.size.width, bubbleRect.size.height);
-	if (!isTyping) {
+	if ([message plainLine]) {
+		cell->_bubbleRect = bubbleRect;
 		cell->_textRect = textRect;
-		cell->_textRect.origin.x += bubbleX;
+		cell->_avatarRect = NSZeroRect;
+	} else {
+		CGFloat avatarX = cell->_outgoing
+		    ? width - inset - t.avatarSide
+		    : inset;
+		CGFloat bubbleX = cell->_outgoing
+		    ? avatarX - t.avatarGap - bubbleRect.size.width
+		    : inset + t.avatarSide + t.avatarGap;
+
+		cell->_bubbleRect = NSMakeRect(bubbleX, top,
+		                               bubbleRect.size.width, bubbleRect.size.height);
+		if (!isTyping) {
+			cell->_textRect = textRect;
+			cell->_textRect.origin.x += bubbleX;
+		}
+		cell->_avatarRect = NSMakeRect(avatarX, top, t.avatarSide, t.avatarSide);
 	}
-	cell->_avatarRect = NSMakeRect(avatarX, top, t.avatarSide, t.avatarSide);
 
 	[_cells addObject:cell];
 	if (outCell != NULL) {
@@ -349,7 +444,8 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 		BOOL grouped = NO;
 		if (i > 0) {
 			TLBubbleMessage *previous = [_messages objectAtIndex:i - 1];
-			grouped = [previous outgoing] == [message outgoing] &&
+			grouped = ![message plainLine] && ![previous plainLine] &&
+			    [previous outgoing] == [message outgoing] &&
 			    [[previous senderName] isEqualToString:[message senderName]];
 		}
 		cursor += grouped ? t.sameSpeakerGap : t.messageGap;
@@ -597,6 +693,9 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 
 - (void)drawAvatarOfCell:(TLBubbleCell *)cell
 {
+	if (NSIsEmptyRect(cell->_avatarRect)) {
+		return;
+	}
 	NSRect avatarRect = cell->_avatarRect;
 
 	[[NSGraphicsContext currentContext] saveGraphicsState];
@@ -643,6 +742,14 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 - (void)drawBalloonOfCell:(TLBubbleCell *)cell
 {
 	NSRect bubbleRect = cell->_bubbleRect;
+
+	// Status lines are bare text; no silhouette is drawn for them.
+	if ([cell->_message plainLine]) {
+		[[self displayStringForMessage:cell->_message]
+		    drawInRect:cell->_textRect];
+		return;
+	}
+
 	NSColor *base = cell->_outgoing
 	    ? [_theme outgoingColor]
 	    : [_theme incomingColor];

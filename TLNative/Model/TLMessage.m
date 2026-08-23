@@ -233,6 +233,11 @@ static NSDate *TLParseISO8601(NSString *string)
 	return self;
 }
 
+- (BOOL)isSelf
+{
+	return _self;
+}
+
 - (BOOL)isAction
 {
 	return _type == TLMessageTypeAction;
