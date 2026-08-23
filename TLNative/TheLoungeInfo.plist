@@ -24,6 +24,8 @@
 	<string>TheLounge.png</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>URL</key>
+	<string>https://github.com/probonopd/TheLounge</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright (c) 2026 Simon Peter. All rights reserved.</string>
 	<key>NSHighResolutionCapable</key>

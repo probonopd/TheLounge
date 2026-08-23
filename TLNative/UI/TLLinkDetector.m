@@ -16,7 +16,9 @@ static NSCharacterSet *TLURLCharSet(void)
 		    [NSMutableCharacterSet characterSetWithCharactersInString:
 		 @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#@!$&*+=%"];
 		[m addCharactersInString:@"(),;[]"];
-		set = m;
+		// The factory method autoreleases; the static outlives the pool
+		// that created it and must own its reference.
+		set = [m retain];
 	}
 	return set;
 }

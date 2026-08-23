@@ -216,6 +216,18 @@ int main(void)
 		ranges = [TLLinkDetector rangesOfLinksInString:@"no links here"];
 		PASS([ranges count] == 0, "plain text has no links");
 
+		// The detector caches its character set in a static; the cache must
+		// survive the autorelease pool that created it (this crashed live
+		// when the second message was rendered after a pool drain).
+		{
+			NSAutoreleasePool *inner = [NSAutoreleasePool new];
+			[TLLinkDetector rangesOfLinksInString:@"warmup https://a.example"];
+			[inner release];
+		}
+		ranges = [TLLinkDetector rangesOfLinksInString:
+		    @"second pass https://b.example after pool drain"];
+		PASS([ranges count] == 1, "detector cache outlives its pool");
+
 		NSString *wiki = @"https://github.com/gershwin-desktop/"
 		    "gershwin-desktop/wiki/Changelog-2026%E2%80%9009#the-lounge";
 		ranges = [TLLinkDetector rangesOfLinksInString:wiki];
