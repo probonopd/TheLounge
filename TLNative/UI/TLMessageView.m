@@ -179,6 +179,11 @@
 	bubble.outgoing = [message isSelf];
 	bubble.plainLine = [message isSystemMessage];
 	bubble.senderName = nick;
+	// Same palette as the text log and the avatar, so one user always has
+	// one color across all three renderings.
+	if (![message isSystemMessage]) {
+		bubble.senderColor = [TLMessageRenderer colorForNick:nick];
+	}
 	bubble.attributedText =
 		[TLMessageRenderer attributedStringForBubbleBodyOfMessage:message];
 	bubble.avatar = [self avatarForNick:nick];

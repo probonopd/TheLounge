@@ -15,6 +15,9 @@
 @property (nonatomic, copy) NSString *senderName;
 @property (nonatomic, copy) NSString *text;
 @property (nonatomic, retain) NSAttributedString *attributedText;
+// The user's nick color; balloons tint themselves with a lighter version
+// of it so each speaker stays recognizable at a glance.
+@property (nonatomic, retain) NSColor *senderColor;
 @property (nonatomic, assign) BOOL outgoing;
 @property (nonatomic, retain) NSImage *avatar;
 

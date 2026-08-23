@@ -300,9 +300,16 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	if (text == nil) {
 		text = @"";
 	}
-	NSColor *color = [message outgoing]
-	    ? [_theme outgoingTextColor]
-	    : [_theme incomingTextColor];
+	NSColor *color = nil;
+	if ([message senderColor] != nil) {
+		// Tinted balloons always take the dark body color; the gold-tuned
+		// outgoing text would clash on arbitrary pastel hues.
+		color = [_theme incomingTextColor];
+	} else {
+		color = [message outgoing]
+		    ? [_theme outgoingTextColor]
+		    : [_theme incomingTextColor];
+	}
 	return TLAttributedFromString(text, [_theme messageFont], color);
 }
 
@@ -753,6 +760,12 @@ static NSColor *TLLerpColor(NSColor *a, NSColor *b, CGFloat t)
 	NSColor *base = cell->_outgoing
 	    ? [_theme outgoingColor]
 	    : [_theme incomingColor];
+
+	// Every balloon carries a lighter version of the speaker's nick color;
+	// the theme colors remain as fallbacks when no user color is known.
+	if (cell->_message.senderColor != nil) {
+		base = TLBubbleTintFromUserColor(cell->_message.senderColor);
+	}
 
 	NSBezierPath *path = [self balloonPathInRect:bubbleRect
 	                                cornerRadius:[_theme cornerRadius]

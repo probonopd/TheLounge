@@ -182,3 +182,13 @@ NSColor *TLBubbleDarken(NSColor *color, CGFloat amount)
 {
 	return TLBlendColor(color, -amount);
 }
+
+NSColor *TLBubbleTintFromUserColor(NSColor *userColor)
+{
+	if (userColor == nil) {
+		return nil;
+	}
+	// Strong enough that neighbouring palette entries stay distinguishable
+	// through the gloss, mild enough for dark body text to keep contrast.
+	return TLBlendColor(userColor, 0.55);
+}

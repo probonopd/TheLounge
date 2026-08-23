@@ -52,3 +52,7 @@
 // amount > 0 blends toward white, amount < 0 toward black.
 NSColor *TLBubbleLighten(NSColor *color, CGFloat amount);
 NSColor *TLBubbleDarken(NSColor *color, CGFloat amount);
+
+// Lifts a user's nick color towards white so a balloon can carry the
+// speaker's hue while staying pastel enough for dark body text.
+NSColor *TLBubbleTintFromUserColor(NSColor *userColor);

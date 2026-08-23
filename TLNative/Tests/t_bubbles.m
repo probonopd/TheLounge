@@ -14,6 +14,7 @@
 
 #import "TLBubbleMessage.h"
 #import "TLBubbleTranscriptView.h"
+#import "TLBubbleTheme.h"
 #import "TLMessage.h"
 #import "TLUser.h"
 #import "TLMessageRenderer.h"
@@ -79,6 +80,27 @@ int main(void)
 		PASS(m.plainLine == NO, "plainLine defaults to NO");
 		m.plainLine = YES;
 		PASS(m.plainLine == YES, "plainLine roundtrips");
+
+		NSColor *user = [NSColor colorWithCalibratedRed:0.9
+		                                          green:0.45
+		                                           blue:0.45
+		                                          alpha:1.0];
+		m.senderColor = user;
+		PASS([m.senderColor isEqual:user], "senderColor roundtrips");
+
+		// The balloon fill must be a lifted version of the nick color so
+		// bubbles stay pastel while still reading as "that user's" hue.
+		NSColor *tint = TLBubbleTintFromUserColor(user);
+		CGFloat br = 0.0;
+		CGFloat bt = 0.0;
+		[tint getHue:NULL saturation:NULL brightness:&br alpha:NULL];
+		[user getHue:NULL saturation:NULL brightness:&bt alpha:NULL];
+		PASS(br > bt, "bubble tint is lighter than the user color");
+		CGFloat th = 0.0;
+		CGFloat uh = 0.0;
+		[tint getHue:&th saturation:NULL brightness:NULL alpha:NULL];
+		[user getHue:&uh saturation:NULL brightness:NULL alpha:NULL];
+		PASS(fabs(th - uh) < 0.02, "bubble tint keeps the user's hue");
 	}
 
 	// --- Transcript view -------------------------------------------------

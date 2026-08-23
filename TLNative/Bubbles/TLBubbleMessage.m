@@ -24,6 +24,7 @@
 	[_senderName release];
 	[_text release];
 	[_attributedText release];
+	[_senderColor release];
 	[_avatar release];
 	[super dealloc];
 }
