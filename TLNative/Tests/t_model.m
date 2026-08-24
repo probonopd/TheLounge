@@ -169,6 +169,19 @@ int main(void)
 		PASS([uc userWithNick:@"nick"] == nil, "user removed");
 		[u release]; [uc release];
 
+		/* Unique prefix lookup for nick completion. */
+		TLChannel *pc = [[TLChannel alloc] init];
+		TLUser *pj = [[TLUser alloc] initWithDictionary:@{@"nick": @"jmaloney", @"mode": @""}];
+		TLUser *pk = [[TLUser alloc] initWithDictionary:@{@"nick": @"Korne127", @"mode": @""}];
+		[pc addUser:pj];
+		[pc addUser:pk];
+		PASS([[pc uniqueUserWithNickPrefix:@"J"] isEqual:pj], "prefix match is case-insensitive");
+		PASS([pc uniqueUserWithNickPrefix:@"jma"] == pj, "longer prefix still matches");
+		PASS([pc uniqueUserWithNickPrefix:@"zz"] == nil, "unknown prefix yields nothing");
+		[pc addUser:[[TLUser alloc] initWithDictionary:@{@"nick": @"joe", @"mode": @""}]];
+		PASS([pc uniqueUserWithNickPrefix:@"j"] == nil, "ambiguous prefix yields nothing");
+		[pc release];
+
 		/* Channel type round trip. */
 		PASS([TLChannelTypeToString(TLChannelTypeQuery) isEqualToString:@"query"], "chan type to string");
 		PASS(TLChannelTypeFromString(@"lobby") == TLChannelTypeLobby, "chan type from string");

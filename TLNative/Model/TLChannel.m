@@ -158,6 +158,26 @@ static id TLObject(id value)
 	[_users removeObjectForKey:[nick lowercaseString]];
 }
 
+- (TLUser *)uniqueUserWithNickPrefix:(NSString *)prefix
+{
+	if ([prefix length] == 0) {
+		return nil;
+	}
+	NSString *lower = [prefix lowercaseString];
+	TLUser *match = nil;
+	BOOL ambiguous = NO;
+	for (TLUser *user in [_users allValues]) {
+		if ([[user.nick lowercaseString] hasPrefix:lower]) {
+			if (match != nil) {
+				ambiguous = YES;
+				break;
+			}
+			match = user;
+		}
+	}
+	return ambiguous ? nil : match;
+}
+
 - (NSArray<TLUser *> *)sortedUsers
 {
 	NSArray *all = [_users allValues];

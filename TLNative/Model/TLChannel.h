@@ -48,6 +48,9 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 
 - (TLUser *)userWithNick:(NSString *)nick;
+// The one user whose nick starts with the prefix (case-insensitive); nil
+// when no user or more than one user matches.
+- (TLUser *)uniqueUserWithNickPrefix:(NSString *)prefix;
 - (void)addUser:(TLUser *)user;
 - (void)removeUserWithNick:(NSString *)nick;
 - (NSArray<TLUser *> *)sortedUsers;

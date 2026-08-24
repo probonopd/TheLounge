@@ -104,6 +104,7 @@
 		NSMakeRect(150, 5, NSWidth(contentBounds) - 150 - 70, 24)];
 	[_inputField setTarget:self];
 	[_inputField setAction:@selector(sendInput:)];
+	[_inputField setDelegate:self];
 	[_inputField setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
 	[bar addSubview:_inputField];
 
@@ -389,6 +390,51 @@
 		[_session sendMessage:text toChannelId:_selectedChannelId];
 	}
 	[_inputField setStringValue:@""];
+}
+
+// Tab completes the word before the cursor to a nick of the current
+// channel, but only when exactly one user matches; anything ambiguous is
+// left untouched rather than guessing.
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView
+doCommandBySelector:(SEL)command
+{
+	// Name-based selector comparison: robust even where SEL pointers are
+	// not guaranteed identical across modules.
+	BOOL isTab = [NSStringFromSelector(command) isEqualToString:@"insertTab:"];
+	if (!isTab || control != _inputField) {
+		return NO;
+	}
+
+	NSString *text = [textView string];
+	NSUInteger cursor = NSMaxRange([textView selectedRange]);
+	NSUInteger start = cursor;
+	NSCharacterSet *spaces = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+	while (start > 0 && ![spaces characterIsMember:[text characterAtIndex:start - 1]]) {
+		start--;
+	}
+	if (cursor <= start) {
+		return YES;
+	}
+
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	TLUser *match = [channel uniqueUserWithNickPrefix:
+	    [text substringWithRange:NSMakeRange(start, cursor - start)]];
+	if (!match) {
+		return YES;
+	}
+
+	// A completion that starts the line reads as an address; mid-sentence
+	// it is just a mention.
+	NSString *nick = [match nick];
+	NSString *replacement = (start == 0)
+	    ? [nick stringByAppendingString:@": "]
+	    : [nick stringByAppendingString:@" "];
+	NSString *newText = [NSString stringWithFormat:@"%@%@%@",
+	    [text substringToIndex:start], replacement,
+	    [text substringFromIndex:cursor]];
+	[textView setString:newText];
+	[textView setSelectedRange:NSMakeRange(start + [replacement length], 0)];
+	return YES;
 }
 
 #pragma mark - Window title

@@ -15,7 +15,7 @@
 
 @interface TLMainWindowController : NSWindowController <NSSplitViewDelegate,
 	TLNetworkOutlineViewDelegate, TLMessageViewDelegate, NSWindowDelegate,
-	TLUserListViewDelegate, TLContextMenuActionDelegate>
+	TLUserListViewDelegate, TLContextMenuActionDelegate, NSTextFieldDelegate>
 {
 	TLoungeSession *_session;
 	NSSplitView *_splitView;
