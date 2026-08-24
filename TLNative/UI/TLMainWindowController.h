@@ -12,17 +12,19 @@
 #import "TLContextMenuBuilder.h"
 
 @class TLoungeSession;
+@class TLInputTextView;
 
 @interface TLMainWindowController : NSWindowController <NSSplitViewDelegate,
 	TLNetworkOutlineViewDelegate, TLMessageViewDelegate, NSWindowDelegate,
-	TLUserListViewDelegate, TLContextMenuActionDelegate, NSTextFieldDelegate>
+	TLUserListViewDelegate, TLContextMenuActionDelegate, NSTextViewDelegate>
 {
 	TLoungeSession *_session;
 	NSSplitView *_splitView;
 	TLNetworkOutlineView *_networkOutline;
 	TLMessageView *_messageView;
 	TLUserListView *_userListView;
-	NSTextField *_inputField;
+	TLInputTextView *_inputTextView;
+	NSView *_composerBar;
 	NSButton *_sendButton;
 	NSTextField *_statusLabel;
 	NSInteger _selectedChannelId;

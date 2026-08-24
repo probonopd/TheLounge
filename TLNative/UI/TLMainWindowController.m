@@ -6,6 +6,7 @@
 
 #import "TLMainWindowController.h"
 
+#import "TLInputTextView.h"
 #import "TLoungeSession.h"
 #import "TLServerState.h"
 #import "TLNetwork.h"
@@ -100,13 +101,23 @@
 	[_statusLabel setAutoresizingMask:NSViewMaxYMargin];
 	[bar addSubview:_statusLabel];
 
-	_inputField = [[NSTextField alloc] initWithFrame:
+	// Multi-line composer: Enter sends, Shift-Enter folds a newline into
+	// the draft; the bar grows with the text up to a few lines.
+	NSScrollView *inputScroll = [[NSScrollView alloc] initWithFrame:
 		NSMakeRect(150, 5, NSWidth(contentBounds) - 150 - 70, 24)];
-	[_inputField setTarget:self];
-	[_inputField setAction:@selector(sendInput:)];
-	[_inputField setDelegate:self];
-	[_inputField setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
-	[bar addSubview:_inputField];
+	[inputScroll setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+	[inputScroll setHasVerticalScroller:NO];
+	[inputScroll setBorderType:NSBezelBorder];
+	_inputTextView = [[TLInputTextView alloc] initWithFrame:
+		NSMakeRect(0, 0, [inputScroll contentSize].width,
+		[inputScroll contentSize].height)];
+	[_inputTextView setRichText:NO];
+	[_inputTextView setDelegate:self];
+	[_inputTextView setSendTarget:self action:@selector(sendInput:)];
+	[inputScroll setDocumentView:_inputTextView];
+	[_inputTextView release];
+	[bar addSubview:inputScroll];
+	[inputScroll release];
 
 	_sendButton = [[NSButton alloc] initWithFrame:
 		NSMakeRect(NSWidth(contentBounds) - 64, 4, 60, 26)];
@@ -118,8 +129,43 @@
 	[_sendButton setAutoresizingMask:NSViewMinXMargin | NSViewMaxYMargin];
 	[bar addSubview:_sendButton];
 
+	_composerBar = [bar retain];
 	[contentView addSubview:bar];
 	[bar release];
+}
+
+// Keeps the composer tall enough to show the whole draft, growing the bar
+// (and shrinking the chat area) up to a few visible lines. The input sits
+// with 5pt margins inside the bar, so bar height tracks input height.
+- (void)updateComposerHeight
+{
+	NSSize used = [[_inputTextView layoutManager]
+	    usedRectForTextContainer:[_inputTextView textContainer]].size;
+	const CGFloat minInputHeight = 24.0;
+	const CGFloat maxInputHeight = 58.0;
+	CGFloat needed = MIN(MAX(ceil(used.height) + 2.0, minInputHeight), maxInputHeight);
+
+	NSRect barFrame = [_composerBar frame];
+	CGFloat currentInputHeight = barFrame.size.height - 10.0;
+	CGFloat delta = needed - currentInputHeight;
+	if (fabs(delta) < 1.0) {
+		return;
+	}
+	barFrame.size.height += delta;
+	[_composerBar setFrame:barFrame];
+
+	NSRect splitFrame = [_splitView frame];
+	splitFrame.origin.y += delta;
+	splitFrame.size.height -= delta;
+	[_splitView setFrame:splitFrame];
+}
+
+- (void)textDidChange:(NSNotification *)notification
+{
+	if (notification.object != _inputTextView) {
+		return;
+	}
+	[self updateComposerHeight];
 }
 
 - (void)registerForNotifications
@@ -377,7 +423,7 @@
 	if (_selectedChannelId <= 0) {
 		return;
 	}
-	NSString *text = [[_inputField stringValue]
+	NSString *text = [[_inputTextView string]
 		stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 	if ([text length] == 0) {
 		return;
@@ -389,19 +435,19 @@
 	} else {
 		[_session sendMessage:text toChannelId:_selectedChannelId];
 	}
-	[_inputField setStringValue:@""];
+	[_inputTextView setString:@""];
+	[self updateComposerHeight];
 }
 
 // Tab completes the word before the cursor to a nick of the current
 // channel, but only when exactly one user matches; anything ambiguous is
 // left untouched rather than guessing.
-- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView
-doCommandBySelector:(SEL)command
+- (BOOL)textView:(NSTextView *)textView doCommandBySelector:(SEL)command
 {
 	// Name-based selector comparison: robust even where SEL pointers are
 	// not guaranteed identical across modules.
 	BOOL isTab = [NSStringFromSelector(command) isEqualToString:@"insertTab:"];
-	if (!isTab || control != _inputField) {
+	if (!isTab || textView != _inputTextView) {
 		return NO;
 	}
 
@@ -1102,7 +1148,8 @@ doCommandBySelector:(SEL)command
 	[_networkOutline release];
 	[_messageView release];
 	[_userListView release];
-	[_inputField release];
+	[_inputTextView release];
+	[_composerBar release];
 	[_sendButton release];
 	[_statusLabel release];
 	[super dealloc];
