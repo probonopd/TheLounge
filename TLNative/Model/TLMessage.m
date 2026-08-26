@@ -154,7 +154,14 @@ static NSDate *TLParseISO8601(NSString *string)
 					newTimestamp = [[NSDate dateWithString:t] retain];
 				}
 			} else if ([t isKindOfClass:[NSNumber class]]) {
-				newTimestamp = [[NSDate dateWithTimeIntervalSince1970:[t doubleValue]] retain];
+				// The Lounge stores message time as a Unix millisecond
+				// epoch; the history `more` event instead sends an ISO
+				// string. Normalize milliseconds to seconds here.
+				NSTimeInterval ti = [t doubleValue];
+				if (ti > 1e11) {
+					ti /= 1000.0;
+				}
+				newTimestamp = [[NSDate dateWithTimeIntervalSince1970:ti] retain];
 			}
 			if (newTimestamp) {
 				[_timestamp release];
