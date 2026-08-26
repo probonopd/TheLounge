@@ -1,7 +1,7 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
 TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session t_contextmenu \
-                 t_bubbles
+                 t_bubbles t_badge
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework \
                        -I../Model -I../EngineIO -I../SocketIO -I../Protocol \
@@ -48,6 +48,9 @@ t_bubbles_OBJC_FILES = t_bubbles.m $(BUBBLE_SRC) ../UI/TLMessageRenderer.m \
             ../UI/TLLinkDetector.m ../UI/TLUserListView.m ../UI/TLMessageView.m \
             ../Support/TLPreferences.m $(MODEL_SRC)
 t_bubbles_TOOL_LIBS += -lgnustep-gui
+
+t_badge_OBJC_FILES = t_badge.m $(MODEL_SRC)
+t_badge_TOOL_LIBS += -lgnustep-gui
 
 -include GNUmakefile.preamble
 include $(GNUSTEP_MAKEFILES)/test-tool.make

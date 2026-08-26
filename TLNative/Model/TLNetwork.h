@@ -27,4 +27,9 @@
 - (void)removeChannelWithIdentifier:(NSInteger)identifier;
 - (TLChannel *)lobby;
 
+// Total unread that belongs to this network for badge purposes: the lobby
+// (server) unread plus every channel's badge count. The lobby is excluded
+// from channel badge counts, so this never double-counts.
+- (NSInteger)badgeTotal;
+
 @end

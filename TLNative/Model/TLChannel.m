@@ -68,6 +68,14 @@ TLChannelType TLChannelTypeFromString(NSString *s)
 	return self;
 }
 
+- (NSInteger)badgeCount
+{
+	if (_muted || _type == TLChannelTypeLobby) {
+		return 0;
+	}
+	return _unseen;
+}
+
 static id TLObject(id value)
 {
 	return ([value isKindOfClass:[NSNull class]] || value == nil) ? nil : value;

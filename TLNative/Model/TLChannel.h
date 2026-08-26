@@ -53,6 +53,13 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 
+// The unread count the UI should surface for this channel, used by both the
+// sidebar badge and the Dock badge so the two can never disagree. Muted and
+// lobby channels report zero because the user opted out of noticing them and
+// the lobby cannot receive messages - excluding them from one but not the
+// other would break the invariant that the Dock count equals the window sum.
+- (NSInteger)badgeCount;
+
 - (TLUser *)userWithNick:(NSString *)nick;
 // The one user whose nick starts with the prefix (case-insensitive); nil
 // when no user or more than one user matches.

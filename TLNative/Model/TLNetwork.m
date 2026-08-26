@@ -120,6 +120,19 @@ static id TLObject(id value)
 	return nil;
 }
 
+- (NSInteger)badgeTotal
+{
+	NSInteger total = 0;
+	TLChannel *lobbyChannel = [self lobby];
+	if (lobbyChannel != nil) {
+		total += [lobbyChannel unseen];
+	}
+	for (TLChannel *channel in _channels) {
+		total += [channel badgeCount];
+	}
+	return total;
+}
+
 - (NSString *)description
 {
 	return [NSString stringWithFormat:@"<TLNetwork %@ %@ (%lu channels)>", _uuid, _name,
