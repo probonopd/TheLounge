@@ -27,4 +27,8 @@
 // count hides the badge entirely.
 - (void)updateWithUnreadCount:(NSInteger)count;
 
+// Hide the badge unconditionally, e.g. when the application quits so no stale
+// count lingers on the Dock icon.
+- (void)clear;
+
 @end

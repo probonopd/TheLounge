@@ -52,4 +52,13 @@ static NSString * const TLDockServiceName = @"DockIcon";
 	[_proxy setCountVisible:(badge > 0)];
 }
 
+- (void)clear
+{
+	if (!_proxy) {
+		return;
+	}
+	[_proxy setBadgeCount:0];
+	[_proxy setCountVisible:NO];
+}
+
 @end
