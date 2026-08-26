@@ -7,6 +7,7 @@
 #import "TLNetworkOutlineView.h"
 
 #import "TLChannelBadgeCell.h"
+#import "TLoungeProtocol.h"
 #import "TLServerState.h"
 #import "TLNetwork.h"
 #import "TLChannel.h"

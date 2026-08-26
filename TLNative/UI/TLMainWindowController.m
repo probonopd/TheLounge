@@ -40,6 +40,7 @@
 	_session = [session retain];
 	_selectedChannelId = 0;
 	_loadingHistory = NO;
+	_searchResults = [[NSMutableArray alloc] init];
 	_dockBadge = [[TLDockBadge alloc] init];
 	[self buildInterfaceForWindow:window];
 	// The outline reads directly from the session state; the same
@@ -52,6 +53,9 @@
 	// window existed, so populate from current state right away.
 	[_networkOutline reloadData];
 	[self ensureSelectedChannelPopulated];
+	// Open with the cursor already in the message composer so the user can
+	// start typing without first clicking the text field.
+	[window makeFirstResponder:_inputTextView];
 	}
 	return self;
 }
@@ -86,8 +90,32 @@
 	[_userListView setAutoresizingMask:NSViewHeightSizable];
 	[_userListView setDelegate:self];
 
+	// The message pane stacks a filter box over the transcript so the search
+	// field stays pinned to the top of the chat column while the transcript
+	// below it resizes with the split.
+	_messagePane = [[NSView alloc] initWithFrame:
+		NSMakeRect(0, 0, NSWidth(contentBounds) - 190 - 150 - 2.0 * divider, splitHeight)];
+	[_messagePane setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+
+	_searchField = [[NSSearchField alloc] initWithFrame:
+		NSMakeRect(0, [_messagePane bounds].size.height - 26.0,
+			[_messagePane bounds].size.width, 26.0)];
+	[_searchField setPlaceholderString:@"Filter messages"];
+	[_searchField setTarget:self];
+	[_searchField setDelegate:self];
+	[_searchField setAutoresizingMask:NSViewWidthSizable | NSViewMaxYMargin];
+	[_messagePane addSubview:_searchField];
+
+	// The transcript fills the pane below the search field; its top is pinned
+	// just under the field via the MaxY margin so it never overlaps it.
+	[_messageView setFrame:NSMakeRect(0, 0, [_messagePane bounds].size.width,
+		[_messagePane bounds].size.height - 26.0)];
+	[_messageView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable |
+		NSViewMaxYMargin];
+	[_messagePane addSubview:_messageView];
+
 	[_splitView addSubview:_networkOutline];
-	[_splitView addSubview:_messageView];
+	[_splitView addSubview:_messagePane];
 	[_splitView addSubview:_userListView];
 	[contentView addSubview:_splitView];
 
@@ -183,6 +211,8 @@
 		name:TLLoungeUserListDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(protocolHistoryDidChange:)
 		name:TLLoungeHistoryDidChangeNotification object:nil];
+	[center addObserver:self selector:@selector(protocolSearchResultsDidChange:)
+		name:TLLoungeSearchResultsDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(sessionStateDidChange:)
 		name:TLLoungeSessionStateDidChangeNotification object:_session];
 	[center addObserver:self selector:@selector(bubbleStyleDidChange:)
@@ -205,21 +235,22 @@
 
 #pragma mark - Dock badge
 
-// The Dock badge is the sum of unseen counts the user has not yet looked at.
-// Muted and lobby channels are excluded because the user has opted out of
-// noticing them and the lobby cannot receive messages. The unseen count is
-// client-side and window-visibility aware (see TLChannel), so it grows even
-// for the active channel while the window is hidden.
+- (void)clearDockBadge
+{
+	[_dockBadge clear];
+}
+
+// The Dock badge is exactly the sum of the per-channel badges drawn in the
+// sidebar: both derive from -[TLNetwork badgeTotal], which is the lobby
+// (server) unread plus every channel's badge count, so the Dock total can
+// never diverge from the window's sum. The unseen count is client-side and
+// window-visibility aware (see TLChannel), so it grows even for the active
+// channel while the window is hidden.
 - (void)updateDockBadge
 {
 	NSInteger total = 0;
 	for (TLNetwork *network in _session.serverState.networks) {
-		for (TLChannel *channel in network.channels) {
-			if (channel.muted || channel.type == TLChannelTypeLobby) {
-				continue;
-			}
-			total += channel.unseen;
-		}
+		total += [network badgeTotal];
 	}
 	[_dockBadge updateWithUnreadCount:total];
 }
@@ -254,6 +285,22 @@
 			object:self
 			userInfo:@{@"channelId": @(_selectedChannelId)}];
 	}
+	// The server/lobby unread is network-scoped, not tied to the channel being
+	// viewed. While the user is engaged with a network (window visible, any of
+	// its channels active), its server notices are considered seen, so clear
+	// them the same way the active channel's unread is cleared.
+	TLNetwork *activeNetwork =
+		[_session.serverState networkContainingChannel:_selectedChannelId];
+	TLChannel *lobby = [activeNetwork lobby];
+	if (lobby != nil && lobby.identifier != _selectedChannelId &&
+		(lobby.unseen != 0 || lobby.unseenHighlight != 0)) {
+		lobby.unseen = 0;
+		lobby.unseenHighlight = 0;
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TLLoungeChannelDidChangeNotification
+			object:self
+			userInfo:@{@"channelId": @(lobby.identifier)}];
+	}
 	[self updateDockBadge];
 }
 
@@ -276,6 +323,7 @@
 		return;
 	}
 	_selectedChannelId = channelId;
+	[self resetFilterState];
 	_loadingHistory = NO;
 	_autoHistoryBatches = 0;
 	[_selectedUserNick release];
@@ -301,9 +349,16 @@
 	[_messageView setChannelId:channel.identifier];
 	[_messageView clear];
 	for (TLMessage *message in channel.messages) {
-		[_messageView appendMessage:message];
+		if ([self message:message matchesFilter:_filterText]) {
+			[_messageView appendMessage:message];
+		}
 	}
 	[self updateHasMoreHistoryForChannelId:channel.identifier];
+	if ([_filterText length] > 0) {
+		// While filtering, the scroll-to-top handler runs a server search
+		// rather than plain history, so reflect the search cursor instead.
+		[_messageView setHasMoreHistory:_searchHasMore];
+	}
 	[_messageView scrollToBottom];
 	[_userListView reloadWithChannel:channel];
 	// The bouncer replays only messages newer than what this client last
@@ -396,9 +451,14 @@
 	[_networkOutline reloadData];
 	if (_selectedChannelId == channelId) {
 		if (message) {
-			[_messageView appendMessage:message];
+			if ([self message:message matchesFilter:_filterText]) {
+				[_messageView appendMessage:message];
+			}
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
+		if ([_filterText length] > 0) {
+			[_messageView setHasMoreHistory:_searchHasMore];
+		}
 		// The active channel is on screen, so its unseen count is cleared
 		// immediately even though the protocol just incremented it.
 		[self markActiveChannelSeen];
@@ -416,7 +476,12 @@
 	if (_selectedChannelId == channelId) {
 		TLChannel *channel = [_session.serverState channelWithIdentifier:channelId];
 		if (channel) {
-			[_messageView prependMessages:channel.messages];
+			// Backlog search replies arrive via search:results, not more, so
+			// a `more` event during filtering is unexpected; only prepend
+			// when not filtering.
+			if ([_filterText length] == 0) {
+				[_messageView prependMessages:channel.messages];
+			}
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
 		// A batch may still have left the transcript shorter than the
@@ -436,6 +501,32 @@
 	if (channel) {
 		[_userListView reloadWithChannel:channel];
 	}
+}
+
+// The bouncer answered a backlog `search` with a page of matching messages.
+// Merge them into the running result set, advance the pagination offset, and
+// rebuild the filtered transcript. A short page means the backlog is done.
+- (void)protocolSearchResultsDidChange:(NSNotification *)notification
+{
+	NSInteger channelId = [notification.userInfo[@"channelId"] integerValue];
+	if (channelId != _selectedChannelId) {
+		return;
+	}
+	NSArray *messages = notification.userInfo[@"messages"];
+	NSInteger count = [notification.userInfo[@"count"] integerValue];
+	if (count > 0 && [messages isKindOfClass:[NSArray class]]) {
+		for (TLMessage *message in messages) {
+			[_searchResults addObject:message];
+		}
+		_searchOffset += count;
+	}
+	// The bouncer caps each page at 100, so fewer returned means no more
+	// matches remain for this term.
+	_searchHasMore = (count >= 100);
+	_searchLoading = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(resetSearchLoadingFlag) object:nil];
+	[self rebuildTranscriptForFilter];
 }
 
 - (void)sessionStateDidChange:(NSNotification *)notification
@@ -583,7 +674,7 @@
 
 - (void)messageViewDidScrollToTop:(TLMessageView *)messageView
 {
-	[self requestOlderHistoryForSelectedChannel];
+	[self requestOlderContentForSelectedChannel];
 }
 
 // Asks the bouncer for one batch of messages older than the oldest one we
@@ -616,9 +707,13 @@
 
 // Keeps requesting older batches while the transcript is too short to be
 // scrollable; otherwise reaching the top - and with it history loading -
-// would be impossible.
+// would be impossible. Suppressed while a filter is active, because in that
+// mode scroll-to-top means "search the server", not "load older history".
 - (void)autoFillHistoryIfShortTranscript
 {
+	if ([_filterText length] > 0) {
+		return;
+	}
 	if (!_messageView.hasMoreHistory || [_messageView contentFillsViewport]) {
 		return;
 	}
@@ -636,6 +731,169 @@
 - (void)resetHistoryLoadingFlag
 {
 	_loadingHistory = NO;
+}
+
+#pragma mark - Transcript filtering / server search
+
+// Forgets all filter state; called when switching channels and on teardown so
+// a previous search can never leak into the next channel.
+- (void)resetFilterState
+{
+	[_filterText release];
+	_filterText = nil;
+	[_searchResults removeAllObjects];
+	_searchOffset = 0;
+	_searchHasMore = NO;
+	_searchLoading = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(applySearchFilter) object:nil];
+	if (_searchField && ![[_searchField stringValue] isEqualToString:@""]) {
+		[_searchField setStringValue:@""];
+	}
+}
+
+// Live filtering as the user types; debounced so we rebuild at most once the
+// typing settles rather than on every keystroke.
+- (void)controlTextDidChange:(NSNotification *)notification
+{
+	if ([notification object] != _searchField) {
+		return;
+	}
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(applySearchFilter) object:nil];
+	[self performSelector:@selector(applySearchFilter) withObject:nil afterDelay:0.3];
+}
+
+- (void)applySearchFilter
+{
+	NSString *term = [[_searchField stringValue]
+		stringByTrimmingCharactersInSet:
+			[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+	[_filterText release];
+	_filterText = ([term length] > 0) ? [term retain] : nil;
+	// A fresh term starts a new server search from the first page of the
+	// backlog; discard any previous results.
+	[_searchResults removeAllObjects];
+	_searchOffset = 0;
+	_searchHasMore = ([_filterText length] > 0);
+	_searchLoading = NO;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(resetSearchLoadingFlag) object:nil];
+	[self rebuildTranscriptForFilter];
+	if ([_filterText length] > 0) {
+		// The bouncer may hold matches older than what we downloaded; fetch
+		// the first page of server-side matches immediately so the filter is
+		// not limited to already-loaded messages.
+		[self requestServerSearchForSelectedChannel];
+	}
+}
+
+// Case-insensitive substring match against the message body and the sender's
+// nick, which is what a user expects from a transcript filter.
+- (BOOL)message:(TLMessage *)message matchesFilter:(NSString *)filter
+{
+	if ([filter length] == 0) {
+		return YES;
+	}
+	NSString *needle = [filter lowercaseString];
+	if ([[[message text] lowercaseString] rangeOfString:needle].location
+		!= NSNotFound) {
+		return YES;
+	}
+	TLUser *sender = [message sender];
+	NSString *nick = sender ? [sender nick] : nil;
+	if (nick && [[nick lowercaseString] rangeOfString:needle].location
+		!= NSNotFound) {
+		return YES;
+	}
+	return NO;
+}
+
+// Rebuilds the transcript from the channel's messages plus any server-side
+// search results, keeping only those that match the active filter. The two
+// sources are merged and deduplicated (by time+author+text, since search
+// results carry synthetic ids) and ordered chronologically so backlog matches
+// interleave correctly with the messages we already hold.
+- (void)rebuildTranscriptForFilter
+{
+	TLChannel *channel =
+		[_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (!channel) {
+		return;
+	}
+	[_messageView clear];
+
+	NSMutableArray *combined = [NSMutableArray array];
+	for (TLMessage *message in channel.messages) {
+		[combined addObject:message];
+	}
+	for (TLMessage *message in _searchResults) {
+		[combined addObject:message];
+	}
+	[combined sortUsingComparator:^NSComparisonResult(TLMessage *a, TLMessage *b) {
+		return [a.timestamp compare:b.timestamp];
+	}];
+
+	NSMutableSet *seen = [NSMutableSet set];
+	for (TLMessage *message in combined) {
+		if (![self message:message matchesFilter:_filterText]) {
+			continue;
+		}
+		NSString *key = [NSString stringWithFormat:@"%@|%@|%@",
+			[message.timestamp description], [message text] ?: @"",
+			[message sender] ? [[message sender] nick] : @""];
+		if ([seen containsObject:key]) {
+			continue;
+		}
+		[seen addObject:key];
+		[_messageView appendMessage:message];
+	}
+
+	if ([_filterText length] > 0) {
+		[_messageView setHasMoreHistory:_searchHasMore];
+	} else {
+		[self updateHasMoreHistoryForChannelId:_selectedChannelId];
+	}
+}
+
+// Scroll-to-top routes to a server search while filtering, otherwise to the
+// usual older-history fetch.
+- (void)requestOlderContentForSelectedChannel
+{
+	if ([_filterText length] > 0) {
+		[self requestServerSearchForSelectedChannel];
+	} else {
+		[self requestOlderHistoryForSelectedChannel];
+	}
+}
+
+// Asks the bouncer to search its stored backlog for the active filter term and
+// merge the page of matches into the transcript. Pagination is by `offset`
+// (the bouncer returns at most 100 per page); when a page comes back short the
+// search is exhausted. Single-flight via _searchLoading; a lost response clears
+// the flag after 10 seconds.
+- (void)requestServerSearchForSelectedChannel
+{
+	if (_searchLoading || !_searchHasMore) {
+		return;
+	}
+	TLChannel *channel =
+		[_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (!channel) {
+		return;
+	}
+	_searchLoading = YES;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(resetSearchLoadingFlag) object:nil];
+	[self performSelector:@selector(resetSearchLoadingFlag)
+		withObject:nil afterDelay:10.0];
+	[_session searchMessagesForChannelId:channel.identifier
+		term:_filterText offset:_searchOffset];
+}
+
+- (void)resetSearchLoadingFlag
+{
+	_searchLoading = NO;
 }
 
 #pragma mark - TLNetworkOutlineViewDelegate
@@ -1229,7 +1487,10 @@
 	[_session release];
 	[_splitView release];
 	[_networkOutline release];
+	[_messagePane release];
 	[_messageView release];
+	[_searchField release];
+	[_searchResults release];
 	[_userListView release];
 	[_inputTextView release];
 	[_composerBar release];

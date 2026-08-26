@@ -422,6 +422,9 @@
 
 - (void)applicationWillTerminate:(NSNotification *)notification
 {
+	// Drop the Dock badge before tearing down so no stale unread count is
+	// left on the icon after the app is gone.
+	[_mainWindowController clearDockBadge];
 	[_session disconnect];
 }
 
