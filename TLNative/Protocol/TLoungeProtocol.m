@@ -15,6 +15,7 @@ NSString *const TLLoungeChannelDidChangeNotification = @"TLLoungeChannelDidChang
 NSString *const TLLoungeMessagesDidChangeNotification = @"TLLoungeMessagesDidChangeNotification";
 NSString *const TLLoungeUserListDidChangeNotification = @"TLLoungeUserListDidChangeNotification";
 NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChangeNotification";
+NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchResultsDidChangeNotification";
 
 @interface TLoungeProtocol ()
 {
@@ -126,8 +127,40 @@ NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChang
 
 - (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
 {
-	[self.socketClient emitEvent:@"more"
-		withArguments:@[@{@"target": @(channelId), @"lastId": @(lastId), @"condensed": @NO}]];
+	[self loadMoreHistoryForChannelId:channelId lastId:lastId query:nil];
+}
+
+- (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
+	query:(NSString *)query
+{
+	NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+	[payload setObject:@(channelId) forKey:@"target"];
+	[payload setObject:@(lastId) forKey:@"lastId"];
+	[payload setObject:@NO forKey:@"condensed"];
+	if ([query length] > 0) {
+		[payload setObject:query forKey:@"query"];
+	}
+	[self.socketClient emitEvent:@"more" withArguments:@[payload]];
+}
+
+// The Lounge bouncer searches its stored backlog through a dedicated `search`
+// event (distinct from `more`), keyed by network uuid and (lowercased) channel
+// name rather than the channel id the client uses elsewhere.
+- (void)searchMessagesForChannelId:(NSInteger)channelId term:(NSString *)term
+	offset:(NSInteger)offset
+{
+	TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+	TLNetwork *network = [self.serverState networkContainingChannel:channelId];
+	if (!channel || !network || [term length] == 0) {
+		return;
+	}
+	NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+	[payload setObject:term forKey:@"searchTerm"];
+	[payload setObject:[network.uuid description] forKey:@"networkUuid"];
+	[payload setObject:[[channel.name description] lowercaseString]
+		forKey:@"channelName"];
+	[payload setObject:@(offset) forKey:@"offset"];
+	[self.socketClient emitEvent:@"search" withArguments:@[payload]];
 }
 
 - (void)clearHistoryForChannelId:(NSInteger)channelId

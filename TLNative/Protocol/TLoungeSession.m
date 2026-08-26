@@ -230,6 +230,18 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	[self.protocol loadMoreHistoryForChannelId:channelId lastId:lastId];
 }
 
+- (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
+	query:(NSString *)query
+{
+	[self.protocol loadMoreHistoryForChannelId:channelId lastId:lastId query:query];
+}
+
+- (void)searchMessagesForChannelId:(NSInteger)channelId term:(NSString *)term
+	offset:(NSInteger)offset
+{
+	[self.protocol searchMessagesForChannelId:channelId term:term offset:offset];
+}
+
 - (void)clearHistoryForChannelId:(NSInteger)channelId
 {
 	[self.protocol clearHistoryForChannelId:channelId];

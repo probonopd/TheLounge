@@ -18,6 +18,11 @@
 // Forward declaration; defined near reconcileChannel below.
 static void TLSeedUnseenFromMessages(TLChannel *channel);
 
+// Search-result messages get a private, negative id space so they never
+// collide with real (positive) bouncer message ids when rendered alongside
+// downloaded history.
+static const NSInteger TLLoungeSearchResultIdBase = -100000000;
+
 @implementation TLoungeProtocol_4_5
 
 - (void)registerEventHandlers
@@ -104,6 +109,14 @@ static void TLSeedUnseenFromMessages(TLChannel *channel);
 		}
 		[self handleMoreEvent:args];
 	} forEvent:@"more"];
+
+	[self.dispatcher registerHandler:^(NSArray *args) {
+		TLoungeProtocol_4_5 *self = weakSelf;
+		if (!self) {
+			return;
+		}
+		[self handleSearchResults:args];
+	} forEvent:@"search:results"];
 
 	[self.dispatcher registerHandler:^(NSArray *args) {
 		TLoungeProtocol_4_5 *self = weakSelf;
@@ -591,6 +604,50 @@ static void TLSeedUnseenFromMessages(TLChannel *channel)
 		postNotificationName:TLLoungeHistoryDidChangeNotification
 		object:self
 		userInfo:@{@"channelId": @(chanId)}];
+}
+
+// The bouncer answers a `search` event with `search:results`; each result is
+// a stored message (type "message" only) whose `time` is a Unix millisecond
+// epoch. Resolve the channel back from the echoed network uuid and channel
+// name, build model messages with private ids, and hand them to the UI.
+- (void)handleSearchResults:(NSArray *)args
+{
+	if ([args count] == 0 || ![args[0] isKindOfClass:[NSDictionary class]]) {
+		return;
+	}
+	NSDictionary *payload = args[0];
+	NSArray *results = payload[@"results"];
+	if (![results isKindOfClass:[NSArray class]]) {
+		return;
+	}
+	NSString *networkUuid = [payload[@"networkUuid"] description];
+	NSString *channelName = [payload[@"channelName"] description];
+	TLNetwork *network = [self.serverState networkWithUuid:networkUuid];
+	TLChannel *channel = nil;
+	if (network) {
+		channel = [network channelWithName:channelName];
+	}
+	NSInteger chanId = channel ? channel.identifier : 0;
+
+	NSMutableArray *messages = [NSMutableArray array];
+	NSInteger index = 0;
+	for (id m in results) {
+		if (![m isKindOfClass:[NSDictionary class]]) {
+			continue;
+		}
+		TLMessage *message = [[TLMessage alloc] initWithDictionary:m];
+		message.channelId = chanId;
+		message.identifier = TLLoungeSearchResultIdBase - index;
+		index++;
+		[messages addObject:message];
+		[message release];
+	}
+
+	[[NSNotificationCenter defaultCenter]
+		postNotificationName:TLLoungeSearchResultsDidChangeNotification
+		object:self
+		userInfo:@{@"channelId": @(chanId), @"messages": messages,
+			@"count": @([messages count])}];
 }
 
 - (void)handleNamesEvent:(NSArray *)args

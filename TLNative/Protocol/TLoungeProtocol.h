@@ -17,6 +17,7 @@ extern NSString *const TLLoungeChannelDidChangeNotification;
 extern NSString *const TLLoungeMessagesDidChangeNotification;
 extern NSString *const TLLoungeUserListDidChangeNotification;
 extern NSString *const TLLoungeHistoryDidChangeNotification;
+extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 
 @protocol TLoungeProtocolDelegate <NSObject>
 
@@ -66,6 +67,14 @@ extern NSString *const TLLoungeHistoryDidChangeNotification;
 - (void)openChannelId:(NSInteger)channelId;
 - (void)requestNamesForChannelId:(NSInteger)channelId;
 - (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId;
+// As above, but asks the bouncer to match `query` against older messages so
+// a live filter can search the server backlog as the user scrolls up.
+- (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
+	query:(NSString *)query;
+// Ask the bouncer to search its stored backlog for `term` in `channelId`; the
+// results arrive as a `search:results` event, not via `more`.
+- (void)searchMessagesForChannelId:(NSInteger)channelId term:(NSString *)term
+	offset:(NSInteger)offset;
 - (void)clearHistoryForChannelId:(NSInteger)channelId;
 - (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId;
 

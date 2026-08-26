@@ -483,6 +483,49 @@ int main(void)
 		[protocol2 release]; [state2 release]; [clientState2 release]; [client2 release];
 	}
 
+	/* --- server-side search request carries the query --- */
+	{
+		RecordingClient *client = [[RecordingClient alloc] init];
+		TLServerState *state = [[TLServerState alloc] init];
+		TLClientState *clientState = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *protocol = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:client serverState:state clientState:clientState];
+
+		// Backlog search goes through the dedicated `search` event, keyed by
+		// network uuid and (lowercased) channel name rather than channel id.
+		TLNetwork *net = [[TLNetwork alloc] initWithDictionary:
+			@{@"uuid": @"net-uuid", @"name": @"net"}];
+		TLChannel *chan = [[TLChannel alloc] initWithDictionary:
+			@{@"id": @3, @"name": @"#Test", @"type": @"channel"}];
+		[net addChannel:chan];
+		[state addNetwork:net];
+
+		[protocol searchMessagesForChannelId:3 term:@"hello" offset:0];
+		NSDictionary *search = LastEvent(client);
+		PASS([search[@"event"] isEqualToString:@"search"],
+			"backlog search emits a search event");
+		NSDictionary *searchArgs = search[@"args"][0];
+		PASS([searchArgs[@"searchTerm"] isEqualToString:@"hello"],
+			"search forwards the term");
+		PASS([searchArgs[@"networkUuid"] isEqualToString:@"net-uuid"],
+			"search targets the network by uuid");
+		PASS([searchArgs[@"channelName"] isEqualToString:@"#test"],
+			"search targets the channel by lowercased name");
+		PASS([searchArgs[@"offset"] integerValue] == 0,
+			"search starts at the first page");
+
+		// The no-query history overload must not send a query key at all.
+		[client.emitted removeAllObjects];
+		[protocol loadMoreHistoryForChannelId:3 lastId:42];
+		NSDictionary *plain = LastEvent(client);
+		PASS([plain[@"args"][0][@"query"] isEqual:[NSNull null]] == NO &&
+			plain[@"args"][0][@"query"] == nil,
+			"plain history request omits the query");
+
+		[protocol release]; [state release]; [clientState release]; [client release];
+		[net release]; [chan release];
+	}
+
 	[arp release];
 	return 0;
 }
