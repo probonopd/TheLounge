@@ -74,6 +74,12 @@ TLMessageType TLMessageTypeFromString(NSString *s);
 
 - (BOOL)isAction;
 - (BOOL)isSystemMessage;
+// YES only for genuine incoming chat (PRIVMSG/ACTION from a real sender),
+// i.e. messages that should bump the unread/unseen badge. Server status
+// lines (connection errors, pings, "Server closed connection") arrive as
+// type `message` but with no `from`, and joins/parts/quits carry a sender
+// but are not conversational, so neither should count.
+- (BOOL)countsAsUnseen;
 // Named accessor for the wire's "self" flag; the property name collides
 // with -self from NSObject.
 - (BOOL)isSelf;

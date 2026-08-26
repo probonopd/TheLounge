@@ -13,6 +13,7 @@
 
 @class TLoungeSession;
 @class TLInputTextView;
+@class TLDockBadge;
 
 @interface TLMainWindowController : NSWindowController <NSSplitViewDelegate,
 	TLNetworkOutlineViewDelegate, TLMessageViewDelegate, NSWindowDelegate,
@@ -37,6 +38,9 @@
 	// transcript shorter than the viewport; guards against a server that
 	// keeps reporting more messages than it actually sends.
 	NSInteger _autoHistoryBatches;
+	// Reflects the total unread-message count in the Dock; nil when no Dock
+	// service is reachable.
+	TLDockBadge *_dockBadge;
 }
 
 @property (nonatomic, readonly) TLoungeSession *session;

@@ -263,11 +263,39 @@ static void TLFlushChunk(NSMutableAttributedString *result, NSMutableString *chu
 	[chunk setString:@""];
 }
 
+// Collapse runs of three or more newlines down to two (a single blank line)
+// so the transcript never shows more than one blank line in a row, e.g. when
+// a multi-line message pastes several empty lines.
+static NSString *TLCollapseConsecutiveBlankLines(NSString *text)
+{
+	if (!text || [text length] == 0) {
+		return text;
+	}
+	NSUInteger len = [text length];
+	NSMutableString *out = [NSMutableString stringWithCapacity:len];
+	NSInteger run = 0;
+	for (NSUInteger i = 0; i < len; i++) {
+		unichar c = [text characterAtIndex:i];
+		if (c == '\n') {
+			if (run >= 2) {
+				continue;
+			}
+			[out appendFormat:@"%C", c];
+			run++;
+		} else {
+			[out appendFormat:@"%C", c];
+			run = 0;
+		}
+	}
+	return out;
+}
+
 static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItalic, NSColor *defaultFG)
 {
 	if (!text) {
 		text = @"";
 	}
+	text = TLCollapseConsecutiveBlankLines(text);
 	if (!defaultFG) {
 		defaultFG = TLDefaultTextColor();
 	}

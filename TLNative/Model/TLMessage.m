@@ -243,6 +243,20 @@ static NSDate *TLParseISO8601(NSString *string)
 	return _type == TLMessageTypeAction;
 }
 
+- (BOOL)countsAsUnseen
+{
+	if (_self) {
+		return NO;
+	}
+	if (_type != TLMessageTypeMessage && _type != TLMessageTypeAction) {
+		return NO;
+	}
+	if (_sender == nil || [[_sender nick] length] == 0) {
+		return NO;
+	}
+	return YES;
+}
+
 - (BOOL)isSystemMessage
 {
 	switch (_type) {

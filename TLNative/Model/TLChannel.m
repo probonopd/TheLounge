@@ -51,6 +51,8 @@ TLChannelType TLChannelTypeFromString(NSString *s)
 		_key = @"";
 		_unread = 0;
 		_highlight = 0;
+		_unseen = 0;
+		_unseenHighlight = 0;
 		_firstUnread = 0;
 		_muted = NO;
 		_state = TLChannelStateParted;

@@ -7,6 +7,7 @@
 #import "TLMainWindowController.h"
 
 #import "TLInputTextView.h"
+#import "TLDockBadge.h"
 #import "TLoungeSession.h"
 #import "TLServerState.h"
 #import "TLNetwork.h"
@@ -39,6 +40,7 @@
 	_session = [session retain];
 	_selectedChannelId = 0;
 	_loadingHistory = NO;
+	_dockBadge = [[TLDockBadge alloc] init];
 	[self buildInterfaceForWindow:window];
 	// The outline reads directly from the session state; the same
 	// TLServerState object is mutated in place across reconnects.
@@ -185,11 +187,74 @@
 		name:TLLoungeSessionStateDidChangeNotification object:_session];
 	[center addObserver:self selector:@selector(bubbleStyleDidChange:)
 		name:TLBubbleStyleDidChangeNotification object:nil];
+	// Any change that can move the unread totals must refresh the Dock badge.
+	[center addObserver:self selector:@selector(updateDockBadge)
+		name:TLLoungeNetworkListDidChangeNotification object:nil];
+	[center addObserver:self selector:@selector(updateDockBadge)
+		name:TLLoungeChannelDidChangeNotification object:nil];
+	[center addObserver:self selector:@selector(updateDockBadge)
+		name:TLLoungeMessagesDidChangeNotification object:nil];
+	[center addObserver:self selector:@selector(updateDockBadge)
+		name:TLLoungeHistoryDidChangeNotification object:nil];
 }
 
 - (TLoungeSession *)session
 {
 	return _session;
+}
+
+#pragma mark - Dock badge
+
+// The Dock badge is the sum of unseen counts the user has not yet looked at.
+// Muted and lobby channels are excluded because the user has opted out of
+// noticing them and the lobby cannot receive messages. The unseen count is
+// client-side and window-visibility aware (see TLChannel), so it grows even
+// for the active channel while the window is hidden.
+- (void)updateDockBadge
+{
+	NSInteger total = 0;
+	for (TLNetwork *network in _session.serverState.networks) {
+		for (TLChannel *channel in network.channels) {
+			if (channel.muted || channel.type == TLChannelTypeLobby) {
+				continue;
+			}
+			total += channel.unseen;
+		}
+	}
+	[_dockBadge updateWithUnreadCount:total];
+}
+
+// Treat the active channel as seen once the user can actually see it. This is
+// called when a channel is selected, whenever a message arrives in the active
+// channel, and whenever the window returns to a visible state. A miniaturized
+// or hidden window means the content is not on screen, so the unseen count is
+// left intact there - that is what lets the badge accumulate while the window
+// is in the Dock. (WindowShade is a window-manager feature with no AppKit
+// query, so it cannot be detected here; isVisible/isMiniaturized cover the
+// cases AppKit exposes.)
+- (void)markActiveChannelSeen
+{
+	NSWindow *window = [self window];
+	if (![window isVisible] || [window isMiniaturized]) {
+		return;
+	}
+	if (_selectedChannelId == 0) {
+		return;
+	}
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (!channel) {
+		return;
+	}
+	if (channel.unseen != 0 || channel.unseenHighlight != 0) {
+		channel.unseen = 0;
+		channel.unseenHighlight = 0;
+		// Let the sidebar (and the badge observer below) refresh.
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TLLoungeChannelDidChangeNotification
+			object:self
+			userInfo:@{@"channelId": @(_selectedChannelId)}];
+	}
+	[self updateDockBadge];
 }
 
 - (void)setSelectedChannelId:(NSInteger)selectedChannelId
@@ -226,6 +291,9 @@
 	}
 	[self populateViewsForChannel:channel];
 	[self setWindowTitle];
+	// The channel is now on screen, so clear its unread immediately instead
+	// of waiting for the bouncer to echo the reset back.
+	[self markActiveChannelSeen];
 }
 
 - (void)populateViewsForChannel:(TLChannel *)channel
@@ -331,6 +399,9 @@
 			[_messageView appendMessage:message];
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
+		// The active channel is on screen, so its unseen count is cleared
+		// immediately even though the protocol just incremented it.
+		[self markActiveChannelSeen];
 	}
 	[self setWindowTitle];
 }
@@ -1139,6 +1210,18 @@
 		forKey:@"TLMainWindowFrame"];
 }
 
+// The window returning to the screen means the user can see the active
+// channel again, so drop its unread count right away.
+- (void)windowDidBecomeKey:(NSNotification *)notification
+{
+	[self markActiveChannelSeen];
+}
+
+- (void)windowDidDeminiaturize:(NSNotification *)notification
+{
+	[self markActiveChannelSeen];
+}
+
 - (void)dealloc
 {
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -1150,6 +1233,7 @@
 	[_userListView release];
 	[_inputTextView release];
 	[_composerBar release];
+	[_dockBadge release];
 	[_sendButton release];
 	[_statusLabel release];
 	[super dealloc];

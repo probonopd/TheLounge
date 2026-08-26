@@ -152,9 +152,113 @@ int main(void)
 			"incoming message added");
 		PASS(chan.unread == 2, "unread updated from msg event");
 		PASS(chan.highlight == 1, "highlight updated from msg event");
+		// The unseen count is client-side: it grows for every non-self
+		// message regardless of the active channel or window visibility.
+		PASS(chan.unseen == 1, "unseen incremented from msg event");
+		PASS(chan.unseenHighlight == 1, "unseen highlight incremented");
 		PASS(notified, "messages notification posted");
 
 		[[NSNotificationCenter defaultCenter] removeObserver:observer];
+		[protocol release]; [state release]; [clientState release]; [client release];
+	}
+
+	/* --- msg event maintains unread locally when fields are absent --- */
+	{
+		RecordingClient *client = [[RecordingClient alloc] init];
+		TLServerState *state = [[TLServerState alloc] init];
+		TLClientState *clientState = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *protocol = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:client serverState:state clientState:clientState];
+		[protocol.dispatcher dispatchEvent:@"init" arguments:@[LoadFixture(@"init.json")]];
+
+		// A regular message with no unread/highlight fields must bump the count.
+		NSDictionary *plain = @{
+			@"chan": @2,
+			@"msg": @{
+				@"from": @{@"nick": @"bob"},
+				@"id": @7,
+				@"text": @"plain",
+				@"type": @"message",
+				@"self": @NO,
+				@"highlight": @NO,
+				@"time": @"2025-06-01T12:06:00.000Z",
+			},
+		};
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[plain]];
+		TLChannel *chan = [state channelWithIdentifier:2];
+		PASS(chan.unread == 2, "unread incremented locally without payload field");
+		PASS(chan.highlight == 0, "highlight unchanged for non-highlight msg");
+		PASS(chan.unseen == 1, "unseen incremented locally without payload field");
+		PASS(chan.unseenHighlight == 0, "unseen highlight unchanged for non-highlight msg");
+
+		// A highlight message with no highlight field must bump the highlight.
+		NSDictionary *hi = @{
+			@"chan": @2,
+			@"msg": @{
+				@"from": @{@"nick": @"bob"},
+				@"id": @8,
+				@"text": @"ping",
+				@"type": @"message",
+				@"self": @NO,
+				@"highlight": @YES,
+				@"time": @"2025-06-01T12:07:00.000Z",
+			},
+		};
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[hi]];
+		PASS(chan.unread == 3, "unread incremented for second msg");
+		PASS(chan.highlight == 1, "highlight incremented for highlight msg");
+		PASS(chan.unseen == 2, "unseen incremented for second msg");
+		PASS(chan.unseenHighlight == 1, "unseen highlight incremented for highlight msg");
+
+		// A self message must not count as unread.
+		NSDictionary *selfMsg = @{
+			@"chan": @2,
+			@"msg": @{
+				@"from": @{@"nick": @"me"},
+				@"id": @9,
+				@"text": @"mine",
+				@"type": @"message",
+				@"self": @YES,
+				@"highlight": @NO,
+				@"time": @"2025-06-01T12:08:00.000Z",
+			},
+		};
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[selfMsg]];
+		PASS(chan.unread == 3, "self message does not increment unread");
+		PASS(chan.unseen == 2, "self message does not increment unseen");
+
+		// Technical/server status lines (connection errors, pings, ...) must
+		// not bump the unseen count even though the bouncer counts them.
+		NSDictionary *status = @{
+			@"chan": @2,
+			@"msg": @{
+				@"id": @10,
+				@"text": @"Server closed connection",
+				@"type": @"message",
+				@"self": @NO,
+				@"time": @"2025-06-01T12:09:00.000Z",
+			},
+		};
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[status]];
+		PASS(chan.unseen == 2, "technical status message does not increment unseen");
+		PASS(chan.unseenHighlight == 1, "technical status message does not increment unseen highlight");
+
+		// A non-conversational event with a sender (e.g. a quit) is also
+		// excluded from the unseen count.
+		NSDictionary *quit = @{
+			@"chan": @2,
+			@"msg": @{
+				@"from": @{@"nick": @"bob"},
+				@"id": @11,
+				@"text": @"Remote host closed the connection",
+				@"type": @"quit",
+				@"self": @NO,
+				@"time": @"2025-06-01T12:09:30.000Z",
+			},
+		};
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[quit]];
+		PASS(chan.unseen == 2, "non-conversational event does not increment unseen");
+
 		[protocol release]; [state release]; [clientState release]; [client release];
 	}
 

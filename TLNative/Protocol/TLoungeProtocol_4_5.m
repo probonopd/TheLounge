@@ -15,6 +15,9 @@
 #import "TLSocketEventDispatcher.h"
 #import "TLLogger.h"
 
+// Forward declaration; defined near reconcileChannel below.
+static void TLSeedUnseenFromMessages(TLChannel *channel);
+
 @implementation TLoungeProtocol_4_5
 
 - (void)registerEventHandlers
@@ -317,6 +320,13 @@
 	if ([self.serverState.networks count] == 0) {
 		// First connection: build a fresh state.
 		self.serverState.networks = newState.networks;
+		// Seed unseen from genuinely unread chat, excluding the bouncer's
+		// over-counting of technical/server status lines.
+		for (TLNetwork *network in self.serverState.networks) {
+			for (TLChannel *channel in network.channels) {
+				TLSeedUnseenFromMessages(channel);
+			}
+		}
 	} else {
 		// Reconnection: reconcile the incoming state with the existing local
 		// model so no messages, channels or networks are lost or duplicated.
@@ -402,6 +412,9 @@
 			[self reconcileChannel:newChannel into:existingChannel];
 		} else {
 			[existing addChannel:newChannel];
+			// Seed the client-side unseen count, excluding technical/server
+			// messages, for a freshly added channel.
+			TLSeedUnseenFromMessages(newChannel);
 		}
 	}
 
@@ -415,6 +428,41 @@
 	for (NSNumber *chanId in toRemove) {
 		[existing removeChannelWithIdentifier:[chanId integerValue]];
 	}
+}
+
+// Seed the client-side unseen counts from the bouncer baseline, but exclude
+// technical/server messages (which the bouncer counts in `unread`). We count
+// only genuinely unread chat among the messages we actually received, then add
+// the remainder of the server's unread total (messages not sent to us because
+// they fall outside the loaded window) unchanged.
+static void TLSeedUnseenFromMessages(TLChannel *channel)
+{
+	if (channel.firstUnread == 0) {
+		channel.unseen = 0;
+		channel.unseenHighlight = 0;
+		return;
+	}
+	NSInteger loadedUnread = 0;
+	NSInteger loadedUnseen = 0;
+	NSInteger loadedUnseenHl = 0;
+	for (TLMessage *m in channel.messages) {
+		if (m.identifier < channel.firstUnread) {
+			continue;
+		}
+		loadedUnread++;
+		if ([m countsAsUnseen]) {
+			loadedUnseen++;
+			if (m.highlight) {
+				loadedUnseenHl++;
+			}
+		}
+	}
+	NSInteger remainder = channel.unread - loadedUnread;
+	if (remainder < 0) {
+		remainder = 0;
+	}
+	channel.unseen = loadedUnseen + remainder;
+	channel.unseenHighlight = loadedUnseenHl;
 }
 
 - (void)reconcileChannel:(TLChannel *)newChannel into:(TLChannel *)existing
@@ -436,6 +484,14 @@
 	// id (plus up to 100). Append them, deduplicating by server id.
 	for (TLMessage *message in newChannel.messages) {
 		[existing addMessage:message];
+	}
+
+	// Seed the client-side unseen from genuinely unread chat messages, so the
+	// bouncer's over-counting of technical/server messages does not inflate
+	// the badge. Only seed until we start counting locally, so later syncs do
+	// not clobber counts accumulated while the window was hidden.
+	if (existing.unseen == 0) {
+		TLSeedUnseenFromMessages(existing);
 	}
 }
 
@@ -461,11 +517,37 @@
 	message.channelId = chanId;
 	[channel addMessage:message];
 
+	// The bouncer does not always include the absolute unread/highlight
+	// counts on every `msg` event, so we maintain them locally (SPEC #24:
+	// "maintain independently of the currently displayed view"). Use the
+	// server value when supplied, otherwise count the message ourselves.
+	// The channel being viewed is never counted as unread, matching the
+	// bouncer, which stops incrementing it once the channel is open.
+	BOOL isActiveChannel = (self.serverState.activeChannelId == chanId);
+
 	if (payload[@"unread"]) {
 		channel.unread = [payload[@"unread"] integerValue];
+	} else if (!isActiveChannel && [message countsAsUnseen]) {
+		channel.unread += 1;
 	}
+
 	if (payload[@"highlight"]) {
 		channel.highlight = [payload[@"highlight"] integerValue];
+	} else if (!isActiveChannel && [message countsAsUnseen] &&
+		[message highlight]) {
+		channel.highlight += 1;
+	}
+
+	// The unseen count is purely client-side and window-visibility aware: it
+	// grows for every message the user has not actually looked at, including
+	// the active channel while the window is hidden. The controller clears it
+	// for the active channel once the window is on screen. Technical/server
+	// status lines are excluded so they do not inflate the badge.
+	if ([message countsAsUnseen]) {
+		channel.unseen += 1;
+		if ([message highlight]) {
+			channel.unseenHighlight += 1;
+		}
 	}
 
 	[[NSNotificationCenter defaultCenter]
@@ -764,6 +846,8 @@
 		[channel.messages removeAllObjects];
 		channel.unread = 0;
 		channel.highlight = 0;
+		channel.unseen = 0;
+		channel.unseenHighlight = 0;
 		channel.firstUnread = 0;
 		[[NSNotificationCenter defaultCenter]
 			postNotificationName:TLLoungeMessagesDidChangeNotification

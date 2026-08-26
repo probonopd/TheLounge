@@ -6,6 +6,7 @@
 
 #import "TLNetworkOutlineView.h"
 
+#import "TLChannelBadgeCell.h"
 #import "TLServerState.h"
 #import "TLNetwork.h"
 #import "TLChannel.h"
@@ -72,10 +73,14 @@
 		NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"channel"];
 		[column setWidth:contentSize.width];
 		[column setResizingMask:NSTableColumnAutoresizingMask];
+		TLChannelBadgeCell *badgeCell = [[TLChannelBadgeCell alloc] init];
+		[column setDataCell:badgeCell];
+		[badgeCell release];
 		[_outlineView addTableColumn:column];
 		[_outlineView setOutlineTableColumn:column];
 		[_outlineView setHeaderView:nil];
 		[_outlineView setAutoresizesOutlineColumn:NO];
+		[_outlineView setRowHeight:18.0];
 		[_outlineView setAutoresizingMask:NSViewWidthSizable];
 		[_outlineView setDataSource:self];
 		[_outlineView setDelegate:self];
@@ -248,10 +253,13 @@
 	} else if ([item isKindOfClass:[TLChannel class]]) {
 		TLChannel *channel = item;
 		title = channel.name;
-		if (channel.unread > 0) {
-			title = [title stringByAppendingFormat:@" (%ld)", (long)channel.unread];
+		// Surface the client-side unseen count as a red badge on the cell
+		// (see TLChannelBadgeCell), which reflects messages the user has not
+		// looked at, not the bouncer's open-channel-aware unread.
+		if ([cell respondsToSelector:@selector(setUnseen:)]) {
+			[cell setUnseen:channel.unseen];
 		}
-		if (channel.highlight > 0) {
+		if (channel.unseenHighlight > 0) {
 			font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
 		}
 	}

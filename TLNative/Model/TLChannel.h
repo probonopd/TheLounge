@@ -33,6 +33,12 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 @property (nonatomic, copy) NSString *key;
 @property (nonatomic, assign) NSInteger unread;
 @property (nonatomic, assign) NSInteger highlight;
+// Client-side "not yet seen by the user" counts, independent of the bouncer's
+// unread (which the server freezes at 0 for the open channel). These grow for
+// every message the user has not looked at - including the active channel
+// while the window is hidden - and are cleared when the channel is viewed.
+@property (nonatomic, assign) NSInteger unseen;
+@property (nonatomic, assign) NSInteger unseenHighlight;
 @property (nonatomic, assign) NSInteger firstUnread;
 @property (nonatomic, assign) BOOL muted;
 @property (nonatomic, assign) TLChannelState state;
