@@ -77,4 +77,10 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 - (BOOL)isQuery;
 - (BOOL)isLobby;
 
+// Whether this channel should appear in the channel outline. Queries (private
+// messages) are shown regardless of joined state because the bouncer reports
+// them PARTED even while they are live conversations; other channels require a
+// joined state. Closed channels never appear.
+- (BOOL)isVisibleInOutline;
+
 @end

@@ -269,6 +269,17 @@ static id TLObject(id value)
 	return _type == TLChannelTypeLobby;
 }
 
+- (BOOL)isVisibleInOutline
+{
+	if (_closed) {
+		return NO;
+	}
+	if (_type == TLChannelTypeQuery) {
+		return YES;
+	}
+	return _state == TLChannelStateJoined;
+}
+
 - (NSString *)description
 {
 	return [NSString stringWithFormat:@"<TLChannel %ld %@ (%@)>", (long)_identifier, _name,

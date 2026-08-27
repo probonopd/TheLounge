@@ -526,6 +526,92 @@ int main(void)
 		[net release]; [chan release];
 	}
 
+	/* --- private-message (query) channels arrive via join/init and are
+	 *     always visible in the outline, even when the bouncer reports
+	 *     them PARTED --- */
+	{
+		RecordingClient *client = [[RecordingClient alloc] init];
+		TLServerState *state = [[TLServerState alloc] init];
+		TLClientState *clientState = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *protocol = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:client serverState:state clientState:clientState];
+
+		[protocol.dispatcher dispatchEvent:@"init" arguments:@[LoadFixture(@"init.json")]];
+		TLNetwork *network = state.networks[0];
+
+		// A query channel is delivered with state PARTED even while active.
+		NSDictionary *joinQuery = @{
+			@"network": network.uuid,
+			@"shouldOpen": @YES,
+			@"chan": @{
+				@"id": @99,
+				@"name": @"alice",
+				@"type": @"query",
+				@"state": @0
+			}
+		};
+		[protocol.dispatcher dispatchEvent:@"join" arguments:@[joinQuery]];
+
+		TLChannel *query = [network channelWithIdentifier:99];
+		PASS(query != nil, "query channel created from join event");
+		PASS(query.type == TLChannelTypeQuery, "query channel has type query");
+		PASS(query.state == TLChannelStateParted, "query channel keeps PARTED state");
+		PASS([query isVisibleInOutline], "query channel visible despite PARTED state");
+		PASS(clientState.selectedChannelId == 99, "opened query becomes active");
+
+		// A PM for the query channel is no longer dropped as unknown.
+		[protocol.dispatcher dispatchEvent:@"msg" arguments:@[@{
+			@"chan": @99,
+			@"msg": @{
+				@"id": @500,
+				@"time": @1700000000000,
+				@"type": @"message",
+				@"nick": @"alice",
+				@"text": @"hey, private"
+			}
+		}]];
+		PASS([query.messages count] == 1, "PM message added to the query channel");
+
+		// A query delivered in init is likewise created and visible.
+		TLServerState *state2 = [[TLServerState alloc] init];
+		TLClientState *cs2 = [[TLClientState alloc] init];
+		TLoungeProtocol_4_5 *p2 = [[TLoungeProtocol_4_5 alloc]
+			initWithSocketClient:[[RecordingClient alloc] init]
+			serverState:state2 clientState:cs2];
+		[protocol release]; [state release]; [clientState release]; [client release];
+		[p2.dispatcher dispatchEvent:@"init" arguments:@[@{
+			@"active": @1,
+			@"networks": @[@{
+				@"uuid": @"2b6d9b7c-8f14-4c99-a",
+				@"name": @"Libera.Chat",
+				@"nick": @"testnick",
+				@"serverOptions": @{},
+				@"status": @{@"connected": @YES, @"secure": @YES},
+				@"channels": @[
+					@{@"id": @1, @"name": @"Server", @"type": @"lobby", @"state": @1, @"messages": @[]},
+					@{@"id": @50, @"name": @"bob", @"type": @"query", @"state": @0, @"messages": @[]}
+				]
+			}]
+		}]];
+		TLChannel *q2 = [state2.networks[0] channelWithIdentifier:50];
+		PASS(q2 != nil && q2.type == TLChannelTypeQuery, "query channel from init is created");
+		PASS([q2 isVisibleInOutline], "query channel from init is visible");
+
+		// A non-query PARTED channel stays hidden.
+		TLChannel *parted = [[TLChannel alloc] initWithDictionary:
+			@{@"id": @10, @"name": @"#away", @"type": @"channel", @"state": @0}];
+		PASS(![parted isVisibleInOutline], "parted non-query channel is hidden");
+
+		// A closed channel is hidden regardless of type.
+		TLChannel *closedQuery = [[TLChannel alloc] initWithDictionary:
+			@{@"id": @11, @"name": @"carol", @"type": @"query", @"state": @1}];
+		closedQuery.closed = YES;
+		PASS(![closedQuery isVisibleInOutline], "closed query channel is hidden");
+
+		[state2 release]; [cs2 release]; [p2 release];
+		[parted release]; [closedQuery release];
+	}
+
 	[arp release];
 	return 0;
 }
