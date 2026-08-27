@@ -134,13 +134,20 @@
 	return _serverState ? [NSArray arrayWithArray:_serverState.networks] : [NSArray array];
 }
 
-// Channels shown in the tree: joined channels and queries (the lobby is
-// joined as well). Parted and closed channels stay hidden until rejoined.
+// Channels shown in the tree: joined channels and every query (private
+// message). The lobby is represented by the network header row itself. The
+// bouncer reports query channels with state PARTED even while they are active
+// conversations, so queries are shown regardless of joined state; parted
+// channels and closed channels stay hidden until rejoined.
 - (NSArray *)visibleChannelsForNetwork:(TLNetwork *)network
 {
 	NSMutableArray *result = [NSMutableArray array];
 	for (TLChannel *channel in network.channels) {
-		if (channel.state != TLChannelStateJoined || channel.closed) {
+		if (channel.closed) {
+			continue;
+		}
+		if (channel.type != TLChannelTypeQuery &&
+			channel.state != TLChannelStateJoined) {
 			continue;
 		}
 		[result addObject:channel];
