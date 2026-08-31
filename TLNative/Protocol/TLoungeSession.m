@@ -6,7 +6,7 @@
 
 #import "TLoungeSession.h"
 #import "TLoungeProtocol_4_5.h"
-#import "TLoungeProtocol_NOSTERN.h"
+#import "TLoungeProtocol_Nosterm.h"
 #import "TLNostrSocketClient.h"
 #import "TLNostrCrypto.h"
 #import "TLServerState.h"
@@ -66,9 +66,9 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	id _socketClient;
 	TLConnectionState _state;
 
-	// Additional NOSTERN relay connections that share this session's model
+	// Additional Nosterm relay connections that share this session's model
 	// state. Indexed in parallel; each relay owns a STRIDE-sized slice of the
-	// NOSTERN id range so its channel/message ids route back to it.
+	// Nosterm id range so its channel/message ids route back to it.
 	NSMutableArray *_relayClients;
 	NSMutableArray *_relayProtocols;
 	NSMutableArray *_relayURLs;
@@ -118,12 +118,12 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 		if (useNostr) {
 			_socketClient = [[TLNostrSocketClient alloc] init];
 			[_socketClient setDelegate:self];
-			TLoungeProtocol_NOSTERN *nostr = [[TLoungeProtocol_NOSTERN alloc]
+			TLoungeProtocol_Nosterm *nostr = [[TLoungeProtocol_Nosterm alloc]
 				initWithSocketClient:(TLSocketIOClient *)_socketClient
 				serverState:_serverState
 				clientState:_clientState];
 			_protocol = nostr;
-			// The NOSTERN primary claims slot 0 of the shared id range.
+			// The Nosterm primary claims slot 0 of the shared id range.
 			nostr.channelIdBase = TLLoungeNostrIdBase;
 		} else {
 			_socketClient = [[TLSocketIOClient alloc] init];
@@ -185,7 +185,7 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 #pragma mark - Connection routing
 
 // Returns the protocol that owns a given channel id. The Lounge ids are small
-// integers below the NOSTERN base; NOSTERN ids carry their relay slot.
+// integers below the Nosterm base; Nosterm ids carry their relay slot.
 - (TLoungeProtocol *)protocolForChannelId:(NSInteger)channelId
 {
 	if (channelId < (NSInteger)TLLoungeNostrIdBase) {
@@ -276,15 +276,17 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	privateKey:(NSString *)privateKey
 {
 	if (relayURL == nil) {
+		NSLog(@"[NOSTERM-SESSION] addRelayWithURL: nil URL, aborting");
 		return;
 	}
+	NSLog(@"[NOSTERM-SESSION] addRelayWithURL: %@ username=%@", relayURL, username);
 	TLNostrSocketClient *client = [[TLNostrSocketClient alloc] init];
 	[client setDelegate:self];
-	TLoungeProtocol_NOSTERN *protocol = [[TLoungeProtocol_NOSTERN alloc]
+	TLoungeProtocol_Nosterm *protocol = [[TLoungeProtocol_Nosterm alloc]
 		initWithSocketClient:(TLSocketIOClient *)client
 		serverState:_serverState
 		clientState:_clientState];
-	// Each added relay gets the next slot in the shared NOSTERN id range.
+	// Each added relay gets the next slot in the shared Nosterm id range.
 	uint64_t slot = (uint64_t)([_relayProtocols count] + 1);
 	protocol.channelIdBase = TLLoungeNostrIdBase + slot * TLLoungeNostrIdStride;
 	[protocol setUsername:username password:privateKey];
@@ -304,7 +306,7 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 - (NSArray<NSDictionary *> *)connectedRelays
 {
 	NSMutableArray *result = [NSMutableArray array];
-	NSString *primaryKind = [_protocol isKindOfClass:[TLoungeProtocol_NOSTERN class]]
+	NSString *primaryKind = [_protocol isKindOfClass:[TLoungeProtocol_Nosterm class]]
 		? @"nostern" : @"bouncer";
 	BOOL primaryUp = (_state == TLConnectionStateReady);
 	[result addObject:@{
@@ -349,23 +351,23 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	}
 }
 
-- (NSString *)nosternPublicKeyHex
+- (NSString *)nostermPublicKeyHex
 {
-	for (TLoungeProtocol_NOSTERN *p in _relayProtocols) {
-		NSString *hex = [p nosternPublicKeyHex];
+	for (TLoungeProtocol_Nosterm *p in _relayProtocols) {
+		NSString *hex = [p nostermPublicKeyHex];
 		if ([hex length] > 0) {
 			return hex;
 		}
 	}
-	if ([_protocol isKindOfClass:[TLoungeProtocol_NOSTERN class]]) {
-		return [(TLoungeProtocol_NOSTERN *)_protocol nosternPublicKeyHex];
+	if ([_protocol isKindOfClass:[TLoungeProtocol_Nosterm class]]) {
+		return [(TLoungeProtocol_Nosterm *)_protocol nostermPublicKeyHex];
 	}
 	return nil;
 }
 
-- (NSString *)nosternPublicKeyNpub
+- (NSString *)nostermPublicKeyNpub
 {
-	NSString *hex = [self nosternPublicKeyHex];
+	NSString *hex = [self nostermPublicKeyHex];
 	if ([hex length] == 0) {
 		return nil;
 	}
@@ -641,10 +643,12 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 - (void)socketIOClientDidConnect:(TLSocketIOClient *)client
 {
 	if (client == _socketClient) {
+		NSLog(@"[NOSTERM-SESSION] socketIOClientDidConnect: primary client connected");
 		[self performSelectorOnMainThread:@selector(handleSocketConnected)
 			withObject:nil
 			waitUntilDone:NO];
 	} else {
+		NSLog(@"[NOSTERM-SESSION] socketIOClientDidConnect: relay client connected");
 		TLoungeProtocol *protocol = [self protocolForClient:client];
 		[protocol performSelectorOnMainThread:@selector(transportDidConnect)
 			withObject:nil
@@ -843,6 +847,10 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 - (void)protocol:(TLoungeProtocol *)protocol didFailWithError:(NSError *)error
 {
 	if (protocol != _protocol) {
+		// Relay-originated errors are informational; log them but do not
+		// tear down the session or transition the primary state machine.
+		[[TLLogger sharedLogger] error:@"Relay error: %@",
+			[error localizedDescription]];
 		return;
 	}
 	[self setState:TLConnectionStateProtocolError];

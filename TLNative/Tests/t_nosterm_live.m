@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// Live NOSTERN integration test against a real relay.
+// Live Nosterm integration test against a real relay.
 //
 // This test talks to a real NOSTR relay over the network and publishes events
 // (a NIP-29 group plus messages). It is gated behind an environment variable
@@ -13,11 +13,11 @@
 // passes it to the session as the password. If the variable is unset the test
 // prints a SKIP notice and exits 0 so it never fails in an unconfigured run.
 //
-//   export TL_NOSTERN_TEST_KEY=<64-hex-char seckey>
-//   export TL_NOSTERN_TEST_RELAY=wss://relay.nosterm.com   # optional
-//   ./obj/t_nostern_live
+//   export TL_NOSTERM_TEST_KEY=<64-hex-char seckey>
+//   export TL_NOSTERM_TEST_RELAY=wss://relay.nosterm.com   # optional
+//   ./obj/t_nosterm_live
 //
-// WARNING: the key in TL_NOSTERN_TEST_KEY controls a real NOSTR identity. Run
+// WARNING: the key in TL_NOSTERM_TEST_KEY controls a real NOSTR identity. Run
 // this only with a key you are willing to publish test events under. Never
 // commit a value for it.
 
@@ -125,21 +125,21 @@ static TLChannel *TLFindChannelNamed(TLoungeSession *session, NSString *name)
 int main(void)
 {
 	@autoreleasepool {
-		const char *keyEnv = getenv("TL_NOSTERN_TEST_KEY");
+		const char *keyEnv = getenv("TL_NOSTERM_TEST_KEY");
 		if (keyEnv == NULL || keyEnv[0] == '\0') {
-			printf("SKIP: TL_NOSTERN_TEST_KEY is not set; "
+			printf("SKIP: TL_NOSTERM_TEST_KEY is not set; "
 			       "live relay test not run.\n");
 			return 0;
 		}
 		NSString *key = [NSString stringWithUTF8String:keyEnv];
 		if ([key length] != 64) {
-			printf("SKIP: TL_NOSTERN_TEST_KEY must be 64 hex chars; "
+			printf("SKIP: TL_NOSTERM_TEST_KEY must be 64 hex chars; "
 			       "live relay test not run.\n");
 			return 0;
 		}
 
 		NSString *relay = @"wss://chat.nosterm.com/relay";
-		const char *relayEnv = getenv("TL_NOSTERN_TEST_RELAY");
+		const char *relayEnv = getenv("TL_NOSTERM_TEST_RELAY");
 		if (relayEnv != NULL && relayEnv[0] != '\0') {
 			relay = [NSString stringWithUTF8String:relayEnv];
 		}
@@ -150,7 +150,7 @@ int main(void)
 		NSString *pubkey = [TLNostrCrypto publicKeyXOnlyHexFromPrivateKey:sk];
 
 		[[TLLogger sharedLogger] setLevel:TLLogLevelWarning];
-		if (getenv("TL_NOSTERN_TEST_DEBUG") != NULL) {
+		if (getenv("TL_NOSTERM_TEST_DEBUG") != NULL) {
 			[[TLLogger sharedLogger] setLevel:TLLogLevelDebug];
 		}
 
@@ -232,7 +232,7 @@ int main(void)
 
 		if (channel != nil) {
 			NSString *text = [NSString stringWithFormat:
-				@"hello from t_nostern_live %08x", (unsigned)arc4random()];
+				@"hello from t_nosterm_live %08x", (unsigned)arc4random()];
 			NSLog(@"Sending message to %@", groupName);
 			[session sendMessage:text toChannelId:channel.identifier];
 

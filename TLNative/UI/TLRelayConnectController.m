@@ -56,7 +56,7 @@
 	    - 15.0 - 22.0;
 
 	_relayField = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 10, 22)];
-	[_relayField setStringValue:TLLoungeNosternDefaultRelayURL];
+	[_relayField setStringValue:TLLoungeNostermDefaultRelayURL];
 	[_relayField setPlaceholderString:@"wss://relay.example.com"];
 	[self addRowWithLabel:@"Relay URL" field:_relayField
 		toView:contentView y:y width:width];

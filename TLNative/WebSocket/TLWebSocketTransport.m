@@ -203,6 +203,9 @@
 			break;
 		}
 		if (sel == 0) {
+			if (_stop) {
+				break;
+			}
 			continue;
 		}
 

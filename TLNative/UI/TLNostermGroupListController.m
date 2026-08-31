@@ -4,9 +4,9 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#import "TLNosternGroupListController.h"
+#import "TLNostermGroupListController.h"
 
-@implementation TLNosternGroupListController
+@implementation TLNostermGroupListController
 
 - (instancetype)initWithGroupNames:(NSArray *)groupNames
 {

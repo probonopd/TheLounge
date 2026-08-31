@@ -1,12 +1,12 @@
-# NOSTERN - Protocol Specification
+# Nosterm - Protocol Specification
 
-> NOSTERN is a NOSTR-based chat protocol implemented in this app **alongside**
+> Nosterm is a NOSTR-based chat protocol implemented in this app **alongside**
 > the existing The Lounge (`TLoungeProtocol_4_5`) protocol. It is not a wire
 > format of its own; it is a thin mapping of the app's `TLoungeProtocol`
 > contract onto the NOSTR relay protocol (NIP-01, NIP-28, NIP-42, and friends).
 >
-> Research note: no existing protocol named "NOSTERN" is published. This
-> document therefore *defines* NOSTERN as "Nostr, adapted to the Lounge
+> Research note: no existing protocol named "Nosterm" is published. This
+> document therefore *defines* Nosterm as "Nostr, adapted to the Lounge
 > client's protocol interface". The wire protocol is vanilla NOSTR.
 >
 > Scope: this file is a specification for a future implementation. It is NOT
@@ -39,16 +39,16 @@ The transport chain is fixed and only the protocol object changes:
 
 ```
 TLWebSocketTransport (libcurl CURLWS)
-  -> TLEngineIOClient (EIO=4)        [NOT used by NOSTERN]
-  -> TLSocketIOClient (Socket.IO v5) [NOT used by NOSTERN]
+  -> TLEngineIOClient (EIO=4)        [NOT used by Nosterm]
+  -> TLSocketIOClient (Socket.IO v5) [NOT used by Nosterm]
   -> TLSocketEventDispatcher         [REUSED: transport-agnostic]
-  -> TLoungeProtocol_NOSTERN         [NEW: the swappable layer]
+  -> TLoungeProtocol_Nosterm         [NEW: the swappable layer]
   -> model -> UI (notifications only)
 ```
 
-NOSTERN does NOT use Engine.IO/Socket.IO. It talks raw WebSocket (NIP-01) to
+Nosterm does NOT use Engine.IO/Socket.IO. It talks raw WebSocket (NIP-01) to
 relays. The `TLSocketEventDispatcher` is still reused as the in-process dispatch
-mechanism: the NOSTERN transport delivers parsed relay messages to
+mechanism: the Nosterm transport delivers parsed relay messages to
 `[self.dispatcher dispatchEvent:verb arguments:array]`, and `registerEventHandlers`
 subscribes handlers exactly as `TLoungeProtocol_4_5` does. The session already
 routes all incoming socket data through this dispatcher, so reusing it keeps the
@@ -58,11 +58,11 @@ session code unchanged.
 
 - **WebSocket** to each relay. `ws://` or `wss://`, no fixed path.
 - One WebSocket per relay; all subscriptions multiplexed over it.
-- Connection is established by a NOSTERN transport (a `TLWebSocketTransport`
+- Connection is established by a Nosterm transport (a `TLWebSocketTransport`
   variant that speaks NOSTR frames directly, bypassing Engine.IO/Socket.IO),
   yielding a `socketClient` object that supports `emitEvent:withArguments:` and
   a `TLSocketIOClientDelegate`-shaped callback. The base `TLoungeProtocol`
-  already calls `self.socketClient emitEvent:withArguments:`, so NOSTERN only
+  already calls `self.socketClient emitEvent:withArguments:`, so Nosterm only
   needs a Socket.IO-shaped emitter that, instead of wrapping in `4<payload>`,
   sends the bare NOSTR JSON array.
 - NIP-11 relay info document (optional): HTTP GET with
@@ -123,7 +123,7 @@ Unix seconds.
 
 ## 5. Chat model (NIP-28 public channels)
 
-NOSTERN maps the app's IRC-style channels onto **NIP-28 public chat**:
+Nosterm maps the app's IRC-style channels onto **NIP-28 public chat**:
 
 | NOSTR kind | Meaning             | Key tags / content                              |
 |------------|---------------------|------------------------------------------------|
@@ -134,11 +134,11 @@ NOSTERN maps the app's IRC-style channels onto **NIP-28 public chat**:
 | 44         | Mute user           | `p` -> pubkey (per-viewer)                      |
 
 To read a channel: `REQ` with `{"kinds":[42], "#e":[channelId], "limit":100}`.
-Presence/typing/join-part are not in NIP-28 core; NOSTERN v1 treats channels as
+Presence/typing/join-part are not in NIP-28 core; Nosterm v1 treats channels as
 always-joined public rooms (no IRC join/part semantics). See section 10 for
 extension points.
 
-A "network" in the app has no NOSTR equivalent. NOSTERN models the relay set as
+A "network" in the app has no NOSTR equivalent. Nosterm models the relay set as
 **one synthetic `TLNetwork`** (or one per relay) whose `uuid` is a stable string
 (e.g. the relay URL or a hash of the configured relay set). Channels are NIP-28
 kind-40 channels discovered via subscription.
@@ -150,14 +150,14 @@ kind-40 channels discovered via subscription.
   `[["relay","wss://relay"], ["challenge","<challenge>"]]`.
 - The relay replies `["OK", <auth-event-id>, true, ""]`.
 
-Identity is a secp256k1 keypair, not a username/password. NOSTERN still drives
+Identity is a secp256k1 keypair, not a username/password. Nosterm still drives
 the app's `TLConnectionState` machine through the `TLoungeProtocolDelegate`:
 on relay `AUTH` challenge -> `didReceiveAuthStart:` (-> `Authenticating`), after
 sending a valid kind-22242 -> `setAuthenticated:YES` + `protocolDidAuthenticate:`
 (-> `Initializing`), and once the initial subscription set returns `EOSE` and
 the synthetic `init` is posted -> `protocolDidBecomeReady:` (-> `Ready`).
 
-Credential persistence: `TLoungeSession` already stores a token string; NOSTERN
+Credential persistence: `TLoungeSession` already stores a token string; Nosterm
 reuses that path to persist the NOSTR auth token / pubkey so reconnects skip
 re-auth when the relay accepts the cached credential.
 
@@ -166,7 +166,7 @@ re-auth when the relay accepts the cached credential.
 The app's model and session **only** address channels and messages by `NSInteger
 identifier` (`TLServerState channelWithIdentifier:`, `TLChannel
 messageWithIdentifier:`, etc.). NOSTR uses 32-byte hex/bech32 ids and pubkeys.
-Therefore NOSTERN MUST:
+Therefore Nosterm MUST:
 
 1. Synthesize **stable** `NSInteger` ids for every channel and message. A
    deterministic hash (e.g. FNV/SipHash) of the NOSTR event id/pubkey, masked to
@@ -181,13 +181,13 @@ Therefore NOSTERN MUST:
    ids.
 
 This is invisible to the UI: the UI only ever passes the `NSInteger` it was
-given. The mapping lives entirely inside `TLoungeProtocol_NOSTERN`.
+given. The mapping lives entirely inside `TLoungeProtocol_Nosterm`.
 
 ## 8. Command/event catalog mapping
 
 ### Outgoing (app method -> NOSTR operation)
 
-| `TLoungeProtocol` method                          | NOSTERN behavior                                                        |
+| `TLoungeProtocol` method                          | Nosterm behavior                                                        |
 |---------------------------------------------------|-------------------------------------------------------------------------|
 | `sendMessage:toChannelId:`                        | Publish kind-42 event with `e` -> channel NOSTR id (`root`), `content` = text |
 | `sendCommand:toChannelId:`                        | Same as `sendMessage:` (no IRC `/commands` in v1)                       |
@@ -299,7 +299,7 @@ recovery of missed messages on reconnect.
 ## 11. Integration plan (when implementing)
 
 Files to add (NO modifications to existing protocol code):
-- `TLNative/Protocol/TLoungeProtocol_NOSTERN.h/.m` - subclass of `TLoungeProtocol`,
+- `TLNative/Protocol/TLoungeProtocol_Nosterm.h/.m` - subclass of `TLoungeProtocol`,
   overriding `registerEventHandlers`, `performAuthentication`, and all
   `send*/open*/request*/loadMore*/search*/clear*/setMuted:` methods; owns the
   `NSInteger`<->NOSTR id maps.
@@ -307,7 +307,7 @@ Files to add (NO modifications to existing protocol code):
   client exposing the `TLSocketIOClient`-shaped emitter/delegate used by the base
   class.
 - A way to select the protocol: extend `TLoungeSession` (or add a session flag)
-  so `init` instantiates `TLoungeProtocol_NOSTERN` instead of
+  so `init` instantiates `TLoungeProtocol_Nosterm` instead of
   `TLoungeProtocol_4_5`. The rest of the session (reconnect, credential
   persistence, state machine) is reused unchanged.
 

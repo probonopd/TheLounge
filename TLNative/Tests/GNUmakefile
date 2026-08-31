@@ -1,8 +1,8 @@
 include $(GNUSTEP_MAKEFILES)/common.make
 
 TEST_TOOL_NAME = t_model t_engineio t_socketio t_protocol t_session t_contextmenu \
-                 t_bubbles t_badge t_nostr_crypto t_nostern_live t_nostern_catchup \
-                 t_nostern_cleanup t_nostern_nickname
+                 t_bubbles t_badge t_nostr_crypto t_nosterm_live t_nosterm_catchup \
+                 t_nosterm_cleanup t_nosterm_nickname t_nosterm_read
 
 ADDITIONAL_CPPFLAGS += -I$(GNUSTEP_MAKEFILES)/TestFramework \
                        -I../Model -I../EngineIO -I../SocketIO -I../Protocol \
@@ -19,7 +19,7 @@ SIO_SRC = ../SocketIO/TLSocketIOPacket.m ../SocketIO/TLSocketIOParser.m
 PROTO_SRC = ../Protocol/TLProtocolVersion.m ../Protocol/TLSocketEventDispatcher.m \
             ../Protocol/TLNostrCrypto.m ../Protocol/TLNostrSocketClient.m \
             ../Protocol/TLoungeProtocol.m ../Protocol/TLoungeProtocol_4_5.m \
-            ../Protocol/TLoungeProtocol_NOSTERN.m \
+            ../Protocol/TLoungeProtocol_Nosterm.m \
             ../Protocol/TLoungeSession.m
 SUPPORT_SRC = ../Support/TLLogger.m
 
@@ -58,38 +58,45 @@ t_badge_TOOL_LIBS += -lgnustep-gui
 t_nostr_crypto_OBJC_FILES = t_nostr_crypto.m ../Protocol/TLNostrCrypto.m
 t_nostr_crypto_TOOL_LIBS += -lcrypto
 
-# Live relay integration test. Reads TL_NOSTERN_TEST_KEY (and optionally
-# TL_NOSTERN_TEST_RELAY) from the environment; SKIPs cleanly when unset.
-t_nostern_live_OBJC_FILES = t_nostern_live.m $(PROTO_SRC) $(MODEL_SRC) \
+# Live relay integration test. Reads TL_NOSTERM_TEST_KEY (and optionally
+# TL_NOSTERM_TEST_RELAY) from the environment; SKIPs cleanly when unset.
+t_nosterm_live_OBJC_FILES = t_nosterm_live.m $(PROTO_SRC) $(MODEL_SRC) \
             $(SIO_SRC) $(EIO_SRC) $(SUPPORT_SRC) \
             ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
             ../SocketIO/TLSocketIOClient.m
-t_nostern_live_TOOL_LIBS += -lcurl -lcrypto
+t_nosterm_live_TOOL_LIBS += -lcurl -lcrypto
 
 # Offline catch-up test: a message posted by a second identity while the first
 # is offline must replay on the first's reconnect. Same gating as the live test.
-t_nostern_catchup_OBJC_FILES = t_nostern_catchup.m $(PROTO_SRC) $(MODEL_SRC) \
+t_nosterm_catchup_OBJC_FILES = t_nosterm_catchup.m $(PROTO_SRC) $(MODEL_SRC) \
             $(SIO_SRC) $(EIO_SRC) $(SUPPORT_SRC) \
             ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
             ../SocketIO/TLSocketIOClient.m
-t_nostern_catchup_TOOL_LIBS += -lcurl -lcrypto
+t_nosterm_catchup_TOOL_LIBS += -lcurl -lcrypto
 
 # Cleanup: deletes NIP-29 groups the test identity published on the relay, so
 # repeated live runs do not leave "tltest-"/"catchup-" groups behind. Gated by
-# TL_NOSTERN_TEST_KEY, same as the other live tests.
-t_nostern_cleanup_OBJC_FILES = t_nostern_cleanup.m $(PROTO_SRC) $(MODEL_SRC) \
+# TL_NOSTERM_TEST_KEY, same as the other live tests.
+t_nosterm_cleanup_OBJC_FILES = t_nosterm_cleanup.m $(PROTO_SRC) $(MODEL_SRC) \
             $(SIO_SRC) $(EIO_SRC) $(SUPPORT_SRC) \
             ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
             ../SocketIO/TLSocketIOClient.m
-t_nostern_cleanup_TOOL_LIBS += -lcurl -lcrypto
+t_nosterm_cleanup_TOOL_LIBS += -lcurl -lcrypto
 
 # Offline nickname-resolution unit test: drives kind 0 metadata parsing and
 # displayNameForPubkey: directly, no relay required.
-t_nostern_nickname_OBJC_FILES = t_nostern_nickname.m $(PROTO_SRC) $(MODEL_SRC) \
+t_nosterm_nickname_OBJC_FILES = t_nosterm_nickname.m $(PROTO_SRC) $(MODEL_SRC) \
             $(SIO_SRC) $(EIO_SRC) $(SUPPORT_SRC) \
             ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
             ../SocketIO/TLSocketIOClient.m
-t_nostern_nickname_TOOL_LIBS += -lcurl -lcrypto
+t_nosterm_nickname_TOOL_LIBS += -lcurl -lcrypto
+
+# Read-only relay test: connects to #general and prints the last 3 messages.
+t_nosterm_read_OBJC_FILES = t_nosterm_read.m $(PROTO_SRC) $(MODEL_SRC) \
+            $(SIO_SRC) $(EIO_SRC) $(SUPPORT_SRC) \
+            ../WebSocket/TLWebSocketTransport.m ../EngineIO/TLEngineIOClient.m \
+            ../SocketIO/TLSocketIOClient.m
+t_nosterm_read_TOOL_LIBS += -lcurl -lcrypto
 
 -include GNUmakefile.preamble
 include $(GNUSTEP_MAKEFILES)/test-tool.make

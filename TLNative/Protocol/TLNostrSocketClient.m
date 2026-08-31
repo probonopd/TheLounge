@@ -20,7 +20,7 @@ const uint64_t TLLoungeNostrIdBase = 0x1000000000000000ULL;   // 2^60
 const uint64_t TLLoungeNostrIdStride = 0x0800000000000000ULL; // 2^59
 const uint64_t TLLoungeNostrIdMask = 0x07FFFFFFFFFFFFFFULL;   // STRIDE - 1
 
-NSString *const TLLoungeNosternDefaultRelayURL = @"wss://chat.nosterm.com/relay";
+NSString *const TLLoungeNostermDefaultRelayURL = @"wss://chat.nosterm.com/relay";
 
 @implementation TLNostrSocketClient
 

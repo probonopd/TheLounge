@@ -6,10 +6,10 @@
 
 #import <AppKit/AppKit.h>
 
-// A small modal panel that lists the NIP-29 groups a NOSTERN relay currently
+// A small modal panel that lists the NIP-29 groups a Nosterm relay currently
 // knows about, so the "List all channels" action has something meaningful to
-// show (a NOSTERN relay has no IRC-style channel directory to query).
-@interface TLNosternGroupListController : NSWindowController
+// show (a Nosterm relay has no IRC-style channel directory to query).
+@interface TLNostermGroupListController : NSWindowController
     <NSTableViewDataSource, NSTableViewDelegate>
 {
 	NSTableView *_tableView;

@@ -15,7 +15,7 @@
 #import "TLMessage.h"
 #import "TLUser.h"
 #import "TLPreferences.h"
-#import "TLNosternGroupListController.h"
+#import "TLNostermGroupListController.h"
 
 @implementation TLMainWindowController
 
@@ -1058,8 +1058,8 @@
 	if ([command isEqualToString:@"/list"]) {
 		TLNetwork *network =
 			[_session.serverState networkContainingChannel:channelId];
-		if ([self isNosternNetwork:network]) {
-			[self showNosternGroupListForNetwork:network];
+		if ([self isNostermNetwork:network]) {
+			[self showNostermGroupListForNetwork:network];
 			return;
 		}
 	}
@@ -1114,7 +1114,7 @@
 		return;
 	}
 	// The web client also accepts bare names; pass through unchanged and let
-	// the bouncer normalize the target. NOSTERN relays handle joining by
+	// the bouncer normalize the target. Nosterm relays handle joining by
 	// creating/subscribing to a NIP-29 group instead.
 	[_session joinChannelNamed:name forLobbyId:lobbyId];
 
@@ -1326,26 +1326,26 @@
 	if (network == nil) {
 		return;
 	}
-	if ([self isNosternNetwork:network]) {
-		[self showNosternGroupListForNetwork:network];
+	if ([self isNostermNetwork:network]) {
+		[self showNostermGroupListForNetwork:network];
 		return;
 	}
 	[self contextMenuRunCommand:@"/list"
 		onChannelId:[[network lobby] identifier]];
 }
 
-// A NOSTERN relay has no IRC-style channel directory, so "List all channels"
+// A Nosterm relay has no IRC-style channel directory, so "List all channels"
 // presents the groups we already know about instead of sending a no-op /list.
-- (BOOL)isNosternNetwork:(TLNetwork *)network
+- (BOOL)isNostermNetwork:(TLNetwork *)network
 {
 	if (network == nil) {
 		return NO;
 	}
 	TLoungeProtocol *proto = [_session protocolForNetwork:network];
-	return proto != nil && [proto isNosternProtocol];
+	return proto != nil && [proto isNostermProtocol];
 }
 
-- (void)showNosternGroupListForNetwork:(TLNetwork *)network
+- (void)showNostermGroupListForNetwork:(TLNetwork *)network
 {
 	TLoungeProtocol *proto = [_session protocolForNetwork:network];
 	NSArray *names = [proto knownGroupNames];
@@ -1353,26 +1353,26 @@
 		NSAlert *alert = [[NSAlert alloc] init];
 		[alert setMessageText:@"No NIP-29 groups known"];
 		[alert setInformativeText:
-			@"This NOSTERN relay has no known NIP-29 groups yet. "
+			@"This Nosterm relay has no known NIP-29 groups yet. "
 			@"Join or create one from Join Channel."];
 		[alert addButtonWithTitle:@"OK"];
 		[alert runModal];
 		[alert release];
 		return;
 	}
-	TLNosternGroupListController *panel =
-		[[TLNosternGroupListController alloc] initWithGroupNames:names];
+	TLNostermGroupListController *panel =
+		[[TLNostermGroupListController alloc] initWithGroupNames:names];
 	[panel.window center];
 	NSInteger result = [NSApp runModalForWindow:panel.window];
 	if (result == 1 && [panel.selectedGroupName length] > 0) {
-		[self openNosternGroupNamed:panel.selectedGroupName
+		[self openNostermGroupNamed:panel.selectedGroupName
 			inNetwork:network];
 	}
 	[panel close];
 	[panel release];
 }
 
-- (void)openNosternGroupNamed:(NSString *)name inNetwork:(TLNetwork *)network
+- (void)openNostermGroupNamed:(NSString *)name inNetwork:(TLNetwork *)network
 {
 	for (TLChannel *ch in [network channels]) {
 		if ([[ch name] isEqualToString:name]) {

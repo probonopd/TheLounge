@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#import "TLoungeProtocol_NOSTERN.h"
+#import "TLoungeProtocol_Nosterm.h"
 #import "TLNostrCrypto.h"
 #import "TLNostrSocketClient.h"
 #import "TLSocketEventDispatcher.h"
@@ -22,7 +22,7 @@
 // real (positive) relay message ids when the UI renders them alongside history.
 static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
-@interface TLoungeProtocol_NOSTERN ()
+@interface TLoungeProtocol_Nosterm ()
 {
 	TLNetwork *_relayNetwork;
 	NSMutableDictionary *_intToNostrChannelId;
@@ -38,6 +38,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	NSData *_privateKey;
 	NSString *_pubkeyHex;
 	NSString *_authChallenge;
+	NSString *_authEventId;
 	BOOL _ready;
 	// Offline catch-up: per-channel cursor (most recent seen NOSTR id +
 	// created_at) persisted to disk, plus an in-session dedup set so a message
@@ -58,10 +59,17 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	// Pubkeys we have already asked the relay for (kind 0) so we don't open a
 	// duplicate subscription for the same author.
 	NSMutableSet *_requestedMeta;
+	// Locally-added outgoing messages keyed by synthesized message id; lets
+	// handleOk: remove the message from the channel if the relay rejects it,
+	// and lets handleEvent: dedup the relay echo of an accepted message.
+	NSMutableDictionary *_localMessageById;
+	// Pending retries: event-id -> NSDictionary (event dict + channelId) for
+	// messages rejected by the relay (e.g. timing race with 9021 join).
+	NSMutableDictionary *_pendingRetries;
 }
 @end
 
-@implementation TLoungeProtocol_NOSTERN
+@implementation TLoungeProtocol_Nosterm
 
 - (instancetype)initWithSocketClient:(TLSocketIOClient *)client
                          serverState:(TLServerState *)serverState
@@ -87,6 +95,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		_cleanupDeletedIds = [[NSMutableSet alloc] init];
 		_pubkeyToName = [[NSMutableDictionary alloc] init];
 		_requestedMeta = [[NSMutableSet alloc] init];
+		_localMessageById = [[NSMutableDictionary alloc] init];
+		_pendingRetries = [[NSMutableDictionary alloc] init];
 	}
 	return self;
 }
@@ -107,9 +117,12 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[_cleanupDeletedIds release];
 	[_pubkeyToName release];
 	[_requestedMeta release];
+	[_localMessageById release];
+	[_pendingRetries release];
 	[_privateKey release];
 	[_pubkeyHex release];
 	[_authChallenge release];
+	[_authEventId release];
 	[super dealloc];
 }
 
@@ -118,8 +131,10 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)ensureKeypair
 {
 	if (_privateKey != nil) {
+		NSLog(@"[NOSTERM] ensureKeypair: already have key, pubkey=%@", _pubkeyHex);
 		return;
 	}
+	NSLog(@"[NOSTERM] ensureKeypair: no key yet, looking for one...");
 	NSData *key = nil;
 	NSString *candidate = [self.pendingPassword stringByTrimmingCharactersInSet:
 		[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -142,10 +157,19 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		}
 	}
 	if (key == nil) {
+		key = [self loadPersistedKey];
+		if (key != nil) {
+			NSLog(@"[NOSTERM] ensureKeypair: loaded persisted key");
+		}
+	}
+	if (key == nil) {
 		key = [TLNostrCrypto randomPrivateKey];
+		NSLog(@"[NOSTERM] ensureKeypair: generated new random key");
+		[self persistKey:key];
 	}
 	_privateKey = [key retain];
 	_pubkeyHex = [[TLNostrCrypto publicKeyXOnlyHexFromPrivateKey:_privateKey] retain];
+	NSLog(@"[NOSTERM] ensureKeypair: ready, pubkey=%@", _pubkeyHex);
 }
 
 - (NSString *)relayURLString
@@ -159,17 +183,17 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	return _relayNetwork;
 }
 
-- (BOOL)isNosternProtocol
+- (BOOL)isNostermProtocol
 {
 	return YES;
 }
 
-- (NSString *)nosternPublicKeyHex
+- (NSString *)nostermPublicKeyHex
 {
 	return _pubkeyHex;
 }
 
-- (NSString *)nosternPublicKeyNpub
+- (NSString *)nostermPublicKeyNpub
 {
 	if ([_pubkeyHex length] == 0) {
 		return nil;
@@ -273,7 +297,6 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		NSDictionary *meta = [NSJSONSerialization JSONObjectWithData:data
 			options:0 error:NULL];
 		if ([meta isKindOfClass:[NSDictionary class]]) {
-			// display_name is the richer display name; fall back to name.
 			if ([meta[@"display_name"] length] > 0) {
 				name = [meta[@"display_name"] description];
 			} else if ([meta[@"name"] length] > 0) {
@@ -281,6 +304,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 			}
 		}
 	}
+	NSLog(@"[NOSTERM] handleMetadata: pubkey=%@ name='%@' content=%@", pubkey, name, content);
 	if ([name length] == 0) {
 		return;
 	}
@@ -360,12 +384,14 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)ensureRelayNetwork
 {
 	if (_relayNetwork != nil) {
+		NSLog(@"[NOSTERM] ensureRelayNetwork: already have network '%@'", _relayNetwork.name);
 		return;
 	}
 	NSString *host = [[NSURL URLWithString:[self relayURLString]] host];
 	if ([host length] == 0) {
 		host = @"nostr";
 	}
+	NSLog(@"[NOSTERM] ensureRelayNetwork: creating network for host='%@' relay='%@'", host, [self relayURLString]);
 	_relayNetwork = [[TLNetwork alloc] init];
 	[_relayNetwork setUuid:host];
 	[_relayNetwork setName:host];
@@ -383,30 +409,74 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 - (void)transportDidConnect
 {
+	NSLog(@"[NOSTERM] transportDidConnect: relay connected, relay='%@'", [self relayURLString]);
 	_ready = NO;
 	[_pendingEose removeAllObjects];
 	[self ensureKeypair];
 	[self ensureRelayNetwork];
 	[self loadLocalStore];
 
+	// Signal auth start to the session state machine. The actual
+	// protocolDidAuthenticate: call is deferred until either:
+	//  - the relay sends an AUTH challenge and we complete the NIP-42
+	//    handshake (handleOk: for the kind-22242 event), or
+	//  - the bootstrap subscriptions return EOSE without a prior AUTH
+	//    challenge, meaning the relay does not require authentication.
 	[self.delegate protocol:self didReceiveAuthStart:@(0)];
-	[self.delegate protocolDidAuthenticate:self];
 
+	NSLog(@"[NOSTERM] transportDidConnect: sending initial subscriptions");
 	[self sendReq:@"nostr-channels" filter:@{@"kinds": @[@(40)], @"limit": @(100)}];
 	[self sendReq:@"nostr-groups" filter:@{@"kinds": @[@(39000), @(39002)], @"limit": @(200)}];
 	[self sendReq:@"nostr-msgs" filter:@{@"kinds": @[@(42)], @"limit": @(200)}];
+	// Bulk kind-0 metadata: many relays do not serve individual per-author
+	// subscriptions for kind 0, but they do include kind 0 in a catch-all.
+	// This covers display_name resolution for active users on the relay.
+	[self sendReq:@"nostr-meta" filter:@{@"kinds": @[@(0)], @"limit": @(200)}];
+	// Only bootstrap subscriptions that gate readiness go into _pendingEose.
+	// nostr-groups is excluded: it streams hundreds of 39002 events and would
+	// block becomeReady indefinitely on a busy relay.
 	[_pendingEose addObject:@"nostr-channels"];
-	[_pendingEose addObject:@"nostr-groups"];
 	[_pendingEose addObject:@"nostr-msgs"];
 
-	// Re-open per-channel subscriptions bounded by each channel's cursor so a
-	// reconnect (or relaunch) replays messages missed while offline.
 	[self resubscribeAllChannels];
+
+	// Publish a kind-0 metadata event so other clients see our display name
+	// instead of a truncated pubkey.
+	[self publishKind0Metadata];
 }
 
 - (void)sendReq:(NSString *)subId filter:(NSDictionary *)filter
 {
 	[self.socketClient emitEvent:@"REQ" withArguments:@[subId, filter]];
+}
+
+// Publishes a kind-0 (NIP-01) metadata event so other clients see our display
+// name instead of a bare truncated pubkey.  Best-effort: a failure here is not
+// fatal.
+- (void)publishKind0Metadata
+{
+	NSString *name = self.pendingUsername;
+	if ([name length] == 0) {
+		return;
+	}
+	[self ensureKeypair];
+	NSDictionary *content = @{
+		@"name": name,
+		@"display_name": name
+	};
+	NSData *jsonData = [NSJSONSerialization dataWithJSONObject:content
+		options:0 error:nil];
+	NSString *jsonString = [[[NSString alloc] initWithData:jsonData
+		encoding:NSUTF8StringEncoding] autorelease];
+	NSDictionary *event = [TLNostrCrypto signedEventWithPubkey:_pubkeyHex
+		createdAt:(NSUInteger)time(NULL)
+		kind:0
+		tags:@[]
+		content:jsonString
+		privateKey:_privateKey];
+	if (event != nil) {
+		[self.socketClient emitEvent:@"EVENT" withArguments:@[event]];
+	}
 }
 
 #pragma mark - Offline catch-up
@@ -475,8 +545,46 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 - (void)saveLocalStore
 {
-	NSDictionary *store = @{@"cursors": _channelCursors};
-	[store writeToFile:[self storePath] atomically:YES];
+	NSMutableDictionary *store = [NSMutableDictionary dictionary];
+	store[@"cursors"] = _channelCursors;
+	if (_privateKey != nil) {
+		const unsigned char *bytes = [_privateKey bytes];
+		if ([_privateKey length] == 32) {
+			char hex[65];
+			for (int i = 0; i < 32; i++) {
+				snprintf(hex + i * 2, 3, "%02x", bytes[i]);
+			}
+			hex[64] = 0;
+			store[@"privateKey"] = [NSString stringWithUTF8String:hex];
+		}
+	}
+	[(NSDictionary *)store writeToFile:[self storePath] atomically:YES];
+}
+
+- (NSData *)loadPersistedKey
+{
+	NSDictionary *store = [NSDictionary dictionaryWithContentsOfFile:[self storePath]];
+	NSString *hex = store[@"privateKey"];
+	if (![hex isKindOfClass:[NSString class]] || [hex length] != 64) {
+		return nil;
+	}
+	const char *c = [hex UTF8String];
+	for (int i = 0; i < 64; i++) {
+		if (!isxdigit((unsigned char)c[i])) {
+			return nil;
+		}
+	}
+	unsigned char bytes[32];
+	for (int i = 0; i < 32; i++) {
+		char b[3] = {c[i * 2], c[i * 2 + 1], 0};
+		bytes[i] = (unsigned char)strtol(b, NULL, 16);
+	}
+	return [NSData dataWithBytes:bytes length:32];
+}
+
+- (void)persistKey:(NSData *)key
+{
+	[self saveLocalStore];
 }
 
 // Re-open a per-channel subscription bounded by that channel's cursor. A single
@@ -490,10 +598,11 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		NSString *subId = [NSString stringWithFormat:@"ch-%ld", (long)channelId];
 		NSInteger since = [self cursorTimestampForChannel:channelId] + 1;
 		NSMutableDictionary *filter = [NSMutableDictionary dictionary];
-		if ([_nip29ChannelIds containsObject:cid]) {
-			[filter setObject:@[@(9)] forKey:@"kinds"];
-			[filter setObject:@[address, [self bareGroupIdForAddress:address]] forKey:@"#h"];
-		} else {
+	if ([_nip29ChannelIds containsObject:cid]) {
+		[filter setObject:@[@(9)] forKey:@"kinds"];
+		NSString *groupId = [self bareGroupIdForAddress:address];
+		[filter setObject:@[groupId, address] forKey:@"#h"];
+	} else {
 			[filter setObject:@[@(42)] forKey:@"kinds"];
 			[filter setObject:@[address] forKey:@"#e"];
 		}
@@ -536,16 +645,20 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)handleEvent:(NSArray *)args
 {
 	if ([args count] < 2) {
+		NSLog(@"[NOSTERM] handleEvent: too few args (%lu)", (unsigned long)[args count]);
 		return;
 	}
 	NSString *subId = [args[0] description];
 	NSDictionary *event = args[1];
 	if (![event isKindOfClass:[NSDictionary class]]) {
+		NSLog(@"[NOSTERM] handleEvent: event is not a dict, class=%@", NSStringFromClass([event class]));
 		return;
 	}
 	NSInteger kind = [event[@"kind"] integerValue];
 	if (kind == 40) {
 		[self handleChannelCreate:event];
+	} else if (kind == 41) {
+		[self handleChannelMetadataUpdate:event];
 	} else if (kind == 42) {
 		if (_searchSubId != nil && [subId isEqualToString:_searchSubId]) {
 			[self handleSearchEvent:event];
@@ -621,6 +734,47 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		object:self];
 }
 
+// NIP-28 kind-41: channel metadata update (name, about, picture).
+- (void)handleChannelMetadataUpdate:(NSDictionary *)event
+{
+	// Find the root kind-40 event id from the "e" tag.
+	NSString *rootNostrId = [self rootChannelNostrIdForEvent:event];
+	if (rootNostrId == nil) {
+		return;
+	}
+	NSNumber *intIdNum = _nostrChannelIdToInt[rootNostrId];
+	if (intIdNum == nil) {
+		return;
+	}
+	NSInteger channelId = [intIdNum integerValue];
+	TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+	if (channel == nil) {
+		return;
+	}
+	id content = event[@"content"];
+	if (![content isKindOfClass:[NSString class]] || [content length] == 0) {
+		return;
+	}
+	NSData *data = [content dataUsingEncoding:NSUTF8StringEncoding];
+	NSDictionary *meta = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
+	if (![meta isKindOfClass:[NSDictionary class]]) {
+		return;
+	}
+	NSString *name = meta[@"name"];
+	if ([name isKindOfClass:[NSString class]] && [name length] > 0) {
+		[channel setName:name];
+	}
+	// "about" maps to channel.topic for the UI.
+	NSString *about = meta[@"about"];
+	if ([about isKindOfClass:[NSString class]] && [about length] > 0) {
+		[channel setTopic:about];
+	}
+	[[NSNotificationCenter defaultCenter]
+		postNotificationName:TLLoungeChannelDidChangeNotification
+		object:self
+		userInfo:@{@"channelId": @(channelId)}];
+}
+
 - (NSString *)rootChannelNostrIdForEvent:(NSDictionary *)event
 {
 	NSArray *tags = event[@"tags"];
@@ -655,6 +809,22 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	if (channel == nil) {
 		return;
 	}
+	// If this is a relay echo of a locally-added outgoing message, clear
+	// the pending flag instead of adding a duplicate.
+	if ([nostrId length] > 0) {
+		TLMessage *local = _localMessageById[nostrId];
+		if (local != nil) {
+			local.pending = NO;
+			[_localMessageById removeObjectForKey:nostrId];
+			[[NSNotificationCenter defaultCenter]
+				postNotificationName:TLLoungeMessagesDidChangeNotification
+				object:self
+				userInfo:@{@"channelId": @(channelId)}];
+			NSInteger ts = [event[@"created_at"] integerValue];
+			[self recordEventSeen:nostrId timestamp:ts forChannel:channelId];
+			return;
+		}
+	}
 
 	TLMessage *message = [self messageFromEvent:event channelId:channelId];
 	if (message == nil) {
@@ -686,6 +856,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self requestMetadataForPubkey:pubkey];
 	NSDictionary *dict = @{
 		@"id": @(intId),
+		@"msgid": nostrId,
 		@"type": @"message",
 		@"text": [event[@"content"] description],
 		@"time": event[@"created_at"],
@@ -707,6 +878,17 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	}
 	NSString *subId = [args[0] description];
 	[_pendingEose removeObject:subId];
+
+	// If the relay returned EOSE on the bootstrap subscriptions without
+	// first sending an AUTH challenge, it does not require NIP-42 auth.
+	// Complete the auth handshake now so the session reaches Ready state.
+	// Guard with isAuthenticated to avoid calling the delegate twice.
+	if (_authChallenge == nil && !_ready && ![self isAuthenticated]) {
+		NSLog(@"[NOSTERM] handleEose: no AUTH challenge received, relay does not require auth");
+		[self setAuthenticated:YES];
+		[self.delegate protocolDidAuthenticate:self];
+	}
+
 	if (_searchSubId != nil && [subId isEqualToString:_searchSubId]) {
 		[self finishSearch];
 		return;
@@ -716,7 +898,6 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	if ([subId isEqualToString:@"nostr-groups"] && [_nostrChannelIdToInt count] > 0) {
 		NSMutableArray *addresses = [NSMutableArray array];
 		for (NSString *key in _nostrChannelIdToInt) {
-			// Only the canonical group addresses (relay:url:id) are valid h tags.
 			if ([key hasPrefix:@"ws"]) {
 				[addresses addObject:key];
 			}
@@ -732,7 +913,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 				@"#h": hValues,
 				@"limit": @(200)
 			}];
-			[_pendingEose addObject:@"nostr-group-msgs"];
+			// Not added to _pendingEose: group messages are supplementary
+			// and should not gate the ready state.
 		}
 	}
 	if (_ready) {
@@ -745,6 +927,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 - (void)becomeReady
 {
+	NSLog(@"[NOSTERM] becomeReady: all subscriptions EOSE'd, becoming ready");
 	_ready = YES;
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeNetworkListDidChangeNotification
@@ -755,10 +938,81 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 - (void)handleOk:(NSArray *)args
 {
-	if ([args count] >= 2 && [args[1] boolValue] == NO) {
-		NSString *msg = [args count] >= 3 ? [args[2] description] : @"rejected";
-		[[TLLogger sharedLogger] error:@"NOSTERN event rejected: %@", msg];
+	if ([args count] < 2) {
+		return;
 	}
+	NSString *eventId = [args count] >= 1 ? [args[0] description] : nil;
+	BOOL accepted = [args[1] boolValue];
+	NSLog(@"[NOSTERM] handleOk: eventId=%@ accepted=%d args=%@", eventId, accepted, args);
+
+	// NIP-42: relay acknowledges our kind-22242 auth event.
+	if ([eventId isEqualToString:_authEventId]) {
+		if (accepted) {
+			NSLog(@"[NOSTERM] handleOk: NIP-42 auth accepted");
+			[self setAuthenticated:YES];
+			[self.delegate protocolDidAuthenticate:self];
+		} else {
+			NSString *msg = [args count] >= 3 ? [args[2] description] : @"auth rejected";
+			NSLog(@"[NOSTERM] handleOk: NIP-42 auth REJECTED: %@", msg);
+			[self.delegate protocol:self didFailWithError:
+				[NSError errorWithDomain:@"TLNostermAuthDomain" code:1
+				userInfo:@{NSLocalizedDescriptionKey:
+					[NSString stringWithFormat:@"Authentication failed: %@", msg]}]];
+		}
+		[_authEventId release];
+		_authEventId = nil;
+		return;
+	}
+
+	if (accepted) {
+		if (eventId != nil) {
+			TLMessage *local = _localMessageById[eventId];
+			if (local != nil) {
+				local.pending = NO;
+				[_localMessageById removeObjectForKey:eventId];
+				[[NSNotificationCenter defaultCenter]
+					postNotificationName:TLLoungeMessagesDidChangeNotification
+					object:self
+					userInfo:@{@"channelId": @(local.channelId)}];
+			}
+		}
+	} else {
+		NSString *msg = [args count] >= 3 ? [args[2] description] : @"rejected";
+		[[TLLogger sharedLogger] error:@"Nosterm event %@ rejected: %@", eventId, msg];
+		if (eventId != nil) {
+			TLMessage *local = _localMessageById[eventId];
+			if (local != nil) {
+				NSInteger channelId = local.channelId;
+				NSString *text = local.text;
+				[_localMessageById removeObjectForKey:eventId];
+				TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+				if (channel != nil) {
+					[channel removeMessageWithIdentifier:local.identifier];
+					[[NSNotificationCenter defaultCenter]
+						postNotificationName:TLLoungeMessagesDidChangeNotification
+						object:self
+						userInfo:@{@"channelId": @(channelId)}];
+				}
+				NSMutableDictionary *retry = [NSMutableDictionary dictionary];
+				retry[@"text"] = text;
+				retry[@"channelId"] = @(channelId);
+				_pendingRetries[eventId] = retry;
+				[self performSelector:@selector(retryPendingEvent:) withObject:eventId afterDelay:2.0];
+			}
+		}
+	}
+}
+
+- (void)retryPendingEvent:(NSString *)eventId
+{
+	NSDictionary *retry = _pendingRetries[eventId];
+	if (retry == nil) {
+		return;
+	}
+	[_pendingRetries removeObjectForKey:eventId];
+	NSString *text = retry[@"text"];
+	NSInteger channelId = [retry[@"channelId"] integerValue];
+	[self sendMessage:text toChannelId:channelId];
 }
 
 #pragma mark - NIP-29 managed groups
@@ -803,10 +1057,12 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)sendJoinForGroupAddress:(NSString *)address
 {
 	[self ensureKeypair];
+	// NIP-29 requires the h tag to be the bare group id, not a qualified address.
+	NSString *groupId = [self bareGroupIdForAddress:address];
 	NSDictionary *join = [TLNostrCrypto signedEventWithPubkey:_pubkeyHex
 		createdAt:(NSUInteger)time(NULL)
 		kind:9021
-		tags:@[@[@"h", address]]
+		tags:@[@[@"h", groupId]]
 		content:@""
 		privateKey:_privateKey];
 	if (join != nil) {
@@ -983,6 +1239,22 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	if (channel == nil) {
 		return;
 	}
+	// If this is a relay echo of a locally-added outgoing message, clear
+	// the pending flag instead of adding a duplicate.
+	if ([nostrId length] > 0) {
+		TLMessage *local = _localMessageById[nostrId];
+		if (local != nil) {
+			local.pending = NO;
+			[_localMessageById removeObjectForKey:nostrId];
+			[[NSNotificationCenter defaultCenter]
+				postNotificationName:TLLoungeMessagesDidChangeNotification
+				object:self
+				userInfo:@{@"channelId": @(channelId)}];
+			NSInteger ts = [event[@"created_at"] integerValue];
+			[self recordEventSeen:nostrId timestamp:ts forChannel:channelId];
+			return;
+		}
+	}
 
 	TLMessage *message = [self groupMessageFromEvent:event channelId:channelId];
 	if (message == nil) {
@@ -1014,6 +1286,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self requestMetadataForPubkey:pubkey];
 	NSDictionary *dict = @{
 		@"id": @(intId),
+		@"msgid": nostrId,
 		@"type": @"message",
 		@"text": [event[@"content"] description],
 		@"time": event[@"created_at"],
@@ -1035,6 +1308,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	}
 	[_authChallenge release];
 	_authChallenge = [[args[0] description] retain];
+	NSLog(@"[NOSTERM] handleAuth: relay challenged us, challenge=%@", _authChallenge);
 	[self sendAuthEvent];
 }
 
@@ -1051,6 +1325,9 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		content:@""
 		privateKey:_privateKey];
 	if (event != nil) {
+		[_authEventId release];
+		_authEventId = [[event objectForKey:@"id"] retain];
+		NSLog(@"[NOSTERM] sendAuthEvent: sending kind-22242 auth event, eventId=%@", _authEventId);
 		[self.socketClient emitEvent:@"AUTH" withArguments:@[event]];
 	}
 }
@@ -1058,13 +1335,28 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)handleNotice:(NSArray *)args
 {
 	NSString *msg = [args count] >= 1 ? [args[0] description] : @"";
-	[[TLLogger sharedLogger] info:@"NOSTERN notice: %@", msg];
+	[[TLLogger sharedLogger] info:@"Nosterm notice: %@", msg];
+	// Surface relay-originated warnings/errors to the UI.
+	if ([msg length] > 0) {
+		NSError *error = [NSError errorWithDomain:@"TLNostermRelayDomain" code:2
+			userInfo:@{NSLocalizedDescriptionKey:
+				[NSString stringWithFormat:@"Relay: %@", msg]}];
+		[self.delegate protocol:self didFailWithError:error];
+	}
 }
 
 - (void)handleClosed:(NSArray *)args
 {
+	NSString *subId = [args count] >= 1 ? [args[0] description] : @"";
 	NSString *msg = [args count] >= 2 ? [args[1] description] : @"";
-	[[TLLogger sharedLogger] info:@"NOSTERN subscription closed: %@", msg];
+	[[TLLogger sharedLogger] info:@"Nosterm subscription closed: subId='%@' reason='%@'", subId, msg];
+	// A closed subscription means no events will flow for that filter.
+	if ([msg length] > 0) {
+		NSError *error = [NSError errorWithDomain:@"TLNostermRelayDomain" code:3
+			userInfo:@{NSLocalizedDescriptionKey:
+				[NSString stringWithFormat:@"Subscription '%@' closed: %@", subId, msg]}];
+		[self.delegate protocol:self didFailWithError:error];
+	}
 }
 
 - (void)handleCount:(NSArray *)args
@@ -1093,13 +1385,25 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self ensureKeypair];
 	NSDictionary *event;
 	if ([_nip29ChannelIds containsObject:@(channelId)]) {
-		// nostermd associates kind 9 with the full NIP-29 group address
-		// (<relay>:<id>); the bare id seen in returned events is just its
-		// output normalization, so publish with the full address.
+		NSString *groupId = [self bareGroupIdForAddress:address];
+		NSMutableArray *tags = [NSMutableArray arrayWithObject:@[@"h", groupId]];
+		TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+		if (channel != nil) {
+			NSArray *msgs = channel.messages;
+			NSUInteger count = [msgs count];
+			NSUInteger start = count > 5 ? count - 5 : 0;
+			for (NSUInteger i = start; i < count; i++) {
+				TLMessage *m = (TLMessage *)msgs[i];
+				NSString *prevId = m.msgid;
+				if ([prevId length] > 0) {
+					[tags addObject:@[@"previous", prevId]];
+				}
+			}
+		}
 		event = [TLNostrCrypto signedEventWithPubkey:_pubkeyHex
 			createdAt:(NSUInteger)time(NULL)
 			kind:9
-			tags:@[@[@"h", address]]
+			tags:tags
 			content:text
 			privateKey:_privateKey];
 	} else {
@@ -1110,9 +1414,37 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 			content:text
 			privateKey:_privateKey];
 	}
-	if (event != nil) {
-		[self.socketClient emitEvent:@"EVENT" withArguments:@[event]];
+	if (event == nil) {
+		return;
 	}
+	NSString *eventId = [event objectForKey:@"id"];
+	NSInteger msgIntId = [self messageIntIdForNostrId:eventId];
+	TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+	if (channel == nil) {
+		return;
+	}
+	TLMessage *message = [[TLMessage alloc] initWithDictionary:@{
+		@"id": @(msgIntId),
+		@"msgid": eventId,
+		@"type": @"message",
+		@"text": text,
+		@"time": event[@"created_at"],
+		@"self": @(YES),
+		@"from": @{
+			@"nick": [self displayNameForPubkey:_pubkeyHex],
+			@"username": _pubkeyHex
+		}
+	}];
+	message.channelId = channelId;
+	message.pending = YES;
+	[channel addMessage:message];
+	[[NSNotificationCenter defaultCenter]
+		postNotificationName:TLLoungeMessagesDidChangeNotification
+		object:self
+		userInfo:@{@"channelId": @(channelId), @"message": message}];
+	_localMessageById[eventId] = message;
+	[message release];
+	[self.socketClient emitEvent:@"EVENT" withArguments:@[event]];
 }
 
 - (void)sendCommand:(NSString *)command toChannelId:(NSInteger)channelId
@@ -1130,7 +1462,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	NSMutableDictionary *filter = [NSMutableDictionary dictionary];
 	if ([_nip29ChannelIds containsObject:@(channelId)]) {
 		[filter setObject:@[@(9)] forKey:@"kinds"];
-		[filter setObject:@[address] forKey:@"#h"];
+		NSString *groupId = [self bareGroupIdForAddress:address];
+		[filter setObject:@[groupId, address] forKey:@"#h"];
 	} else {
 		[filter setObject:@[@(42)] forKey:@"kinds"];
 		[filter setObject:@[address] forKey:@"#e"];
@@ -1216,9 +1549,9 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self sendJoinForGroupAddress:address];
 
 	// Always (re)subscribe to the group's messages, whether new or existing.
-	// Match on both the full address and the bare id: the relay indexes kind
-	// 9 by the full address but returns events tagged with the bare id. Bound
-	// by the channel cursor so a rejoin replays messages missed while offline.
+	// NIP-29 subscriptions filter on the bare group id; include the full
+	// address too for relays that index by the qualified form. Bound by the
+	// channel cursor so a rejoin replays messages missed while offline.
 	NSInteger channelId = [self channelIntIdForNostrId:address];
 	NSString *subId = [NSString stringWithFormat:@"ch-%ld", (long)channelId];
 	NSInteger since = [self cursorTimestampForChannel:channelId] + 1;
@@ -1240,6 +1573,21 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	}
 	NSString *address = [self groupAddressForId:groupId];
 	NSNumber *intIdNum = _nostrChannelIdToInt[address] ?: _nostrChannelIdToInt[groupId];
+
+	NSArray *tags = event[@"tags"];
+	if (![tags isKindOfClass:[NSArray class]]) {
+		return;
+	}
+	// Always request metadata for every member pubkey, even if the group
+	// channel has not been created yet (no kind-39000 was received).
+	for (id tag in tags) {
+		if ([tag isKindOfClass:[NSArray class]] && [tag count] >= 2 &&
+			[[tag[0] description] isEqualToString:@"p"]) {
+			NSString *pubkey = [tag[1] description];
+			[self requestMetadataForPubkey:pubkey];
+		}
+	}
+	// Only update the channel's user list if the group is known.
 	if (intIdNum == nil) {
 		return;
 	}
@@ -1247,10 +1595,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	if (channel == nil) {
 		return;
 	}
-	NSArray *tags = event[@"tags"];
-	if (![tags isKindOfClass:[NSArray class]]) {
-		return;
-	}
+
 	for (id tag in tags) {
 		if ([tag isKindOfClass:[NSArray class]] && [tag count] >= 2 &&
 			[[tag[0] description] isEqualToString:@"p"]) {
@@ -1295,7 +1640,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	NSMutableDictionary *filter = [NSMutableDictionary dictionary];
 	if ([_nip29ChannelIds containsObject:@(channelId)]) {
 		[filter setObject:@[@(9)] forKey:@"kinds"];
-		[filter setObject:@[address] forKey:@"#h"];
+		NSString *groupId = [self bareGroupIdForAddress:address];
+		[filter setObject:@[groupId, address] forKey:@"#h"];
 	} else {
 		[filter setObject:@[@(42)] forKey:@"kinds"];
 		[filter setObject:@[address] forKey:@"#e"];

@@ -198,7 +198,7 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 	return nil;
 }
 
-- (BOOL)isNosternProtocol
+- (BOOL)isNostermProtocol
 {
 	return NO;
 }

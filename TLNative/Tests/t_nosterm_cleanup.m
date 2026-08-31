@@ -6,9 +6,9 @@
 
 // Removes NIP-29 groups the test identity published on the relay, so repeated
 // live-test runs do not leave "tltest-"/"catchup-" groups cluttering a shared
-// relay (and the real client that connects to it). Gated by TL_NOSTERN_TEST_KEY.
+// relay (and the real client that connects to it). Gated by TL_NOSTERM_TEST_KEY.
 //
-//   TL_NOSTERN_TEST_KEY=<64hex> ./obj/t_nostern_cleanup
+//   TL_NOSTERM_TEST_KEY=<64hex> ./obj/t_nosterm_cleanup
 //
 // Deletion is best-effort: it relies on the relay honoring NIP-09 (kind 5) and
 // NIP-29 kind 9008. Groups still present after this run are not deletable on
@@ -62,20 +62,20 @@ static NSData *TLHexToData(NSString *hex)
 int main(void)
 {
 	@autoreleasepool {
-		const char *keyEnv = getenv("TL_NOSTERN_TEST_KEY");
+		const char *keyEnv = getenv("TL_NOSTERM_TEST_KEY");
 		if (keyEnv == NULL || keyEnv[0] == '\0') {
-			printf("SKIP: TL_NOSTERN_TEST_KEY is not set; "
+			printf("SKIP: TL_NOSTERM_TEST_KEY is not set; "
 			       "cleanup not run.\n");
 			return 0;
 		}
 		NSString *key = [NSString stringWithUTF8String:keyEnv];
 		if ([key length] != 64) {
-			printf("SKIP: TL_NOSTERN_TEST_KEY must be 64 hex chars.\n");
+			printf("SKIP: TL_NOSTERM_TEST_KEY must be 64 hex chars.\n");
 			return 0;
 		}
 
 		NSString *relay = @"wss://chat.nosterm.com/relay";
-		const char *relayEnv = getenv("TL_NOSTERN_TEST_RELAY");
+		const char *relayEnv = getenv("TL_NOSTERM_TEST_RELAY");
 		if (relayEnv != NULL && relayEnv[0] != '\0') {
 			relay = [NSString stringWithUTF8String:relayEnv];
 		}

@@ -260,7 +260,7 @@
 - (void)connectToRelay:(id)sender
 {
 	// Works with or without an existing bouncer session: if none exists yet,
-	// the submitted relay becomes the primary NOSTERN connection (see
+	// the submitted relay becomes the primary Nosterm connection (see
 	// relayController:didSubmitRelayURL:), otherwise it is added alongside.
 	if (!_relayController) {
 		_relayController = [[TLRelayConnectController alloc] init];
@@ -273,16 +273,16 @@
 	[NSApp activateIgnoringOtherApps:YES];
 }
 
-// Adds a NOSTERN relay to the current session so its channels appear next to
+// Adds a Nosterm relay to the current session so its channels appear next to
 // the existing networks instead of replacing them. With no session yet, the
-// submitted relay becomes the primary NOSTERN connection.
+// submitted relay becomes the primary Nosterm connection.
 - (void)relayController:(TLRelayConnectController *)controller
 	didSubmitRelayURL:(NSURL *)relayURL
 	username:(NSString *)username
 	privateKey:(NSString *)privateKey
 {
 	if (_session == nil) {
-		[self connectToNosternServer:relayURL username:username];
+		[self connectToNostermServer:relayURL username:username];
 		[controller close];
 		return;
 	}
@@ -290,11 +290,12 @@
 	[controller close];
 }
 
-// Creates a standalone NOSTERN session whose primary connection is the given
+// Creates a standalone Nosterm session whose primary connection is the given
 // relay, connects it, and shows the main window once it is ready. Used when the
 // user opens a relay before ever connecting to a The Lounge bouncer.
-- (void)connectToNosternServer:(NSURL *)serverURL username:(NSString *)username
+- (void)connectToNostermServer:(NSURL *)serverURL username:(NSString *)username
 {
+	NSLog(@"[NOSTERM-APP] connectToNostermServer: %@ username=%@", serverURL, username);
 	[_session release];
 	_session = [[TLoungeSession alloc] initWithServerURL:serverURL username:username ?: @"guest"];
 	[self registerSessionObservers];
@@ -358,12 +359,13 @@
 // session exists, otherwise the relay is added to the current session.
 - (void)connectToDemoRelay:(id)sender
 {
-	NSURL *relayURL = [NSURL URLWithString:TLLoungeNosternDefaultRelayURL];
+	NSLog(@"[NOSTERM-APP] connectToDemoRelay: session=%@", _session ? @"exists" : @"nil");
+	NSURL *relayURL = [NSURL URLWithString:TLLoungeNostermDefaultRelayURL];
 	if (_session != nil && [self isRelayConnected:relayURL]) {
 		return;
 	}
 	if (_session == nil) {
-		[self connectToNosternServer:relayURL username:@"guest"];
+		[self connectToNostermServer:relayURL username:@"guest"];
 		return;
 	}
 	[_session addRelayWithURL:relayURL username:_session.username privateKey:nil];

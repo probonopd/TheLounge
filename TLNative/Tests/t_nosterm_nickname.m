@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// Offline unit test for Nostr nickname resolution in TLoungeProtocol_NOSTERN.
+// Offline unit test for Nostr nickname resolution in TLoungeProtocol_Nosterm.
 //
 // Nostr carries no per-message author name; names come from each user's kind 0
 // metadata event (NIP-01), a replaceable event whose `content` is JSON with a
@@ -13,11 +13,11 @@
 // resolves a pubkey to a real nickname. This test drives that path directly
 // (feeding synthetic kind 0 events) without a live relay.
 //
-//   ./obj/t_nostern_nickname
+//   ./obj/t_nosterm_nickname
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
-#import "TLoungeProtocol_NOSTERN.h"
+#import "TLoungeProtocol_Nosterm.h"
 #import "TLServerState.h"
 #import "TLClientState.h"
 #import "TLNetwork.h"
@@ -25,11 +25,11 @@
 #import "TLMessage.h"
 
 // The methods under test are private to the implementation; since the test
-// binary compiles TLoungeProtocol_NOSTERN.m in-process, declaring a category
+// binary compiles TLoungeProtocol_Nosterm.m in-process, declaring a category
 // is enough to call them.
-@interface TLoungeProtocol_NOSTERN (NicknameTestAccess)
+@interface TLoungeProtocol_Nosterm (NicknameTestAccess)
 - (void)ensureKeypair;
-- (NSString *)nosternPublicKeyHex;
+- (NSString *)nostermPublicKeyHex;
 - (NSString *)displayNameForPubkey:(NSString *)pubkey;
 - (void)handleMetadataEvent:(NSDictionary *)event;
 - (TLMessage *)messageFromEvent:(NSDictionary *)event channelId:(NSInteger)channelId;
@@ -71,14 +71,14 @@ int main(void)
 		TLServerState *ss = [[TLServerState alloc] init];
 		TLClientState *cs = [[TLClientState alloc] init];
 
-		TLoungeProtocol_NOSTERN *proto =
-			[[TLoungeProtocol_NOSTERN alloc] initWithSocketClient:nil
+		TLoungeProtocol_Nosterm *proto =
+			[[TLoungeProtocol_Nosterm alloc] initWithSocketClient:nil
 			                                       serverState:ss
 			                                      clientState:cs];
 		[proto setUsername:@"tester" password:kTestKey];
 		[proto ensureKeypair];
 
-		NSString *selfPub = [proto nosternPublicKeyHex];
+		NSString *selfPub = [proto nostermPublicKeyHex];
 		NSString *author =
 			@"abababababababababababababababababababababababababababababababab";
 		NSString *author2 =

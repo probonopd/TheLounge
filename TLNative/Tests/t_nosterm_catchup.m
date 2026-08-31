@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-// Live NOSTERN offline-catch-up test against a real relay.
+// Live Nosterm offline-catch-up test against a real relay.
 //
 // Scenario: identity A connects and posts a message, then goes offline. A second
 // identity B (a different key) posts a message to the same group while A is
@@ -12,12 +12,12 @@
 // "offline catch-up" requirement), and no message may appear twice even though
 // it can arrive via both a global and a per-channel subscription (id dedup).
 //
-// Gated behind TL_NOSTERN_TEST_KEY exactly like t_nostern_live: the key is read
+// Gated behind TL_NOSTERM_TEST_KEY exactly like t_nosterm_live: the key is read
 // from the environment only, never logged or embedded, and the test SKIPs (exit
 // 0) when the variable is unset.
 //
-//   export TL_NOSTERN_TEST_KEY=<64-hex-char seckey>
-//   ./obj/t_nostern_catchup
+//   export TL_NOSTERM_TEST_KEY=<64-hex-char seckey>
+//   ./obj/t_nosterm_catchup
 
 #import <Foundation/Foundation.h>
 #import "Testing.h"
@@ -226,28 +226,28 @@ static BOOL TLNoDuplicateTexts(TLChannel *channel)
 int main(void)
 {
 	@autoreleasepool {
-		const char *keyEnv = getenv("TL_NOSTERN_TEST_KEY");
+		const char *keyEnv = getenv("TL_NOSTERM_TEST_KEY");
 		if (keyEnv == NULL || keyEnv[0] == '\0') {
-			printf("SKIP: TL_NOSTERN_TEST_KEY is not set; "
+			printf("SKIP: TL_NOSTERM_TEST_KEY is not set; "
 			       "offline catch-up test not run.\n");
 			return 0;
 		}
 		NSString *key = [NSString stringWithUTF8String:keyEnv];
 		if ([key length] != 64) {
-			printf("SKIP: TL_NOSTERN_TEST_KEY must be 64 hex chars; "
+			printf("SKIP: TL_NOSTERM_TEST_KEY must be 64 hex chars; "
 			       "offline catch-up test not run.\n");
 			return 0;
 		}
 
 		NSString *relay = @"wss://chat.nosterm.com/relay";
-		const char *relayEnv = getenv("TL_NOSTERN_TEST_RELAY");
+		const char *relayEnv = getenv("TL_NOSTERM_TEST_RELAY");
 		if (relayEnv != NULL && relayEnv[0] != '\0') {
 			relay = [NSString stringWithUTF8String:relayEnv];
 		}
 		NSString *host = [[NSURL URLWithString:relay] host];
 
 		[[TLLogger sharedLogger] setLevel:TLLogLevelWarning];
-		if (getenv("TL_NOSTERN_TEST_DEBUG") != NULL) {
+		if (getenv("TL_NOSTERM_TEST_DEBUG") != NULL) {
 			[[TLLogger sharedLogger] setLevel:TLLogLevelDebug];
 		}
 

@@ -59,7 +59,7 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 
 // Called by the session once the underlying socket is open. The base class has
 // no use for it (The Lounge starts on a server `auth:start` event); a protocol
-// without such a kickoff event (e.g. NOSTERN, which drives a raw relay
+// without such a kickoff event (e.g. Nosterm, which drives a raw relay
 // WebSocket) overrides this to begin its own handshake and subscriptions.
 - (void)transportDidConnect;
 
@@ -88,15 +88,15 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 - (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId;
 
 // Join (or create) a channel/group by name. The base implementation sends the
-// IRC-style `/join` command via `lobbyId`; a relay protocol (NOSTERN) overrides
+// IRC-style `/join` command via `lobbyId`; a relay protocol (Nosterm) overrides
 // this to manage a NIP-29 group instead.
 - (void)joinChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId;
 // The network this protocol manages, if any (nil for bouncer protocols). Used
 // to route a join request to the correct relay when several are connected.
 - (TLNetwork *)managedNetwork;
-// Used by the UI to branch behavior for relay protocols (NOSTERN) that have no
-// IRC-style channel directory to query. Defaults to NO; NOSTERN overrides YES.
-- (BOOL)isNosternProtocol;
+// Used by the UI to branch behavior for relay protocols (Nosterm) that have no
+// IRC-style channel directory to query. Defaults to NO; Nosterm overrides YES.
+- (BOOL)isNostermProtocol;
 // Names of groups/channels this protocol currently knows about. Used to back
 // the "List all channels" action for relay protocols. Defaults to empty.
 - (NSArray *)knownGroupNames;
