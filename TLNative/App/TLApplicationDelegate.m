@@ -9,6 +9,7 @@
 #import "TLoungeSession.h"
 #import "TLMainWindowController.h"
 #import "TLPreferencesController.h"
+#import "TLNostrSocketClient.h"
 
 @interface TLApplicationDelegate ()
 {
@@ -16,6 +17,7 @@
 	TLLoginController *_loginController;
 	TLMainWindowController *_mainWindowController;
 	TLPreferencesController *_preferencesController;
+	TLRelayConnectController *_relayController;
 	// Set while the launch-time token restore is in flight; its failures
 	// must open the login window quietly instead of alarming the user.
 	BOOL _autoConnectAttempt;
@@ -32,6 +34,7 @@
 	[_loginController release];
 	[_mainWindowController release];
 	[_preferencesController release];
+	[_relayController release];
 	[super dealloc];
 }
 
@@ -140,6 +143,10 @@
 
 	[chatMenu addItemWithTitle:@"Connect"
 		action:@selector(chatToggleConnection:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Connect to Nosterm Relay…"
+		action:@selector(connectToRelay:) keyEquivalent:@""];
+	[chatMenu addItemWithTitle:@"Connect to Nosterm Demo Relay"
+		action:@selector(connectToDemoRelay:) keyEquivalent:@""];
 	[chatMenu addItemWithTitle:@"Remove Network…"
 		action:@selector(chatRemoveNetwork:) keyEquivalent:@""];
 	[chatMenu addItem:[NSMenuItem separatorItem]];
@@ -250,6 +257,53 @@
 
 #pragma mark - TLLoginControllerDelegate
 
+- (void)connectToRelay:(id)sender
+{
+	// Works with or without an existing bouncer session: if none exists yet,
+	// the submitted relay becomes the primary NOSTERN connection (see
+	// relayController:didSubmitRelayURL:), otherwise it is added alongside.
+	if (!_relayController) {
+		_relayController = [[TLRelayConnectController alloc] init];
+		_relayController.delegate = self;
+	}
+	[_relayController setConnectEnabled:YES];
+	[_relayController setStatusText:@""];
+	[_relayController showWindow:self];
+	[[_relayController window] makeKeyAndOrderFront:self];
+	[NSApp activateIgnoringOtherApps:YES];
+}
+
+// Adds a NOSTERN relay to the current session so its channels appear next to
+// the existing networks instead of replacing them. With no session yet, the
+// submitted relay becomes the primary NOSTERN connection.
+- (void)relayController:(TLRelayConnectController *)controller
+	didSubmitRelayURL:(NSURL *)relayURL
+	username:(NSString *)username
+	privateKey:(NSString *)privateKey
+{
+	if (_session == nil) {
+		[self connectToNosternServer:relayURL username:username];
+		[controller close];
+		return;
+	}
+	[_session addRelayWithURL:relayURL username:username privateKey:privateKey];
+	[controller close];
+}
+
+// Creates a standalone NOSTERN session whose primary connection is the given
+// relay, connects it, and shows the main window once it is ready. Used when the
+// user opens a relay before ever connecting to a The Lounge bouncer.
+- (void)connectToNosternServer:(NSURL *)serverURL username:(NSString *)username
+{
+	[_session release];
+	_session = [[TLoungeSession alloc] initWithServerURL:serverURL username:username ?: @"guest"];
+	[self registerSessionObservers];
+	if (_loginController) {
+		[_loginController close];
+	}
+	[_session connect];
+}
+
 - (void)loginController:(TLLoginController *)controller
 	didSubmitServerURL:(NSURL *)serverURL
 	username:(NSString *)username
@@ -285,6 +339,47 @@
 		name:TLLoungeSessionDidBecomeReadyNotification object:_session];
 	[center addObserver:self selector:@selector(sessionDidFailWithError:)
 		name:TLLoungeSessionErrorNotification object:_session];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+	// Relay connections create their own session when none exists yet, so these
+	// are always available.
+	if ([item action] == @selector(connectToRelay:) ||
+		[item action] == @selector(connectToDemoRelay:)) {
+		return YES;
+	}
+	return YES;
+}
+
+// One-click join of the public Nosterm Demo Relay. A random keypair is used
+// when no key is supplied elsewhere, so the user lands in the public room
+// without managing keys first. Works as a standalone connection when no bouncer
+// session exists, otherwise the relay is added to the current session.
+- (void)connectToDemoRelay:(id)sender
+{
+	NSURL *relayURL = [NSURL URLWithString:TLLoungeNosternDefaultRelayURL];
+	if (_session != nil && [self isRelayConnected:relayURL]) {
+		return;
+	}
+	if (_session == nil) {
+		[self connectToNosternServer:relayURL username:@"guest"];
+		return;
+	}
+	[_session addRelayWithURL:relayURL username:_session.username privateKey:nil];
+}
+
+// Whether the given relay URL is already the primary or an added relay of the
+// current session, so we don't open a duplicate connection.
+- (BOOL)isRelayConnected:(NSURL *)relayURL
+{
+	NSString *target = [relayURL absoluteString];
+	for (NSDictionary *relay in [_session connectedRelays]) {
+		if ([[[relay objectForKey:@"url"] description] isEqualToString:target]) {
+			return YES;
+		}
+	}
+	return NO;
 }
 
 #pragma mark - Session notifications

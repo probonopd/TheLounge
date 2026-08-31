@@ -69,6 +69,7 @@ TLMessageType TLMessageTypeFromString(NSString *s);
 @property (nonatomic, copy) NSString *statusmsgGroup;
 @property (nonatomic, copy) NSArray *params;
 @property (nonatomic, strong) NSMutableDictionary *metadata;
+@property (nonatomic, assign) BOOL pending;
 
 - (instancetype)initWithDictionary:(NSDictionary *)dict;
 

@@ -14,6 +14,7 @@ NSString *const TLLoungeNetworkListDidChangeNotification = @"TLLoungeNetworkList
 NSString *const TLLoungeChannelDidChangeNotification = @"TLLoungeChannelDidChangeNotification";
 NSString *const TLLoungeMessagesDidChangeNotification = @"TLLoungeMessagesDidChangeNotification";
 NSString *const TLLoungeUserListDidChangeNotification = @"TLLoungeUserListDidChangeNotification";
+NSString *const TLLoungeNicknamesDidChangeNotification = @"TLLoungeNicknamesDidChangeNotification";
 NSString *const TLLoungeHistoryDidChangeNotification = @"TLLoungeHistoryDidChangeNotification";
 NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchResultsDidChangeNotification";
 
@@ -52,6 +53,11 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 - (void)registerEventHandlers
 {
 	// Overridden by protocol version implementations.
+}
+
+- (void)transportDidConnect
+{
+	// No-op for The Lounge; overridden by relay-style protocols.
 }
 
 - (void)dealloc
@@ -118,6 +124,13 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 - (void)openChannelId:(NSInteger)channelId
 {
 	[self.socketClient emitEvent:@"open" withArguments:@[@(channelId)]];
+	// The bouncer does not always push a channel's backlog in response to
+	// `open`; request the most recent page explicitly. Omitting `lastId` makes
+	// the server return the tail (newest page) rather than older-than-0.
+	NSMutableDictionary *payload = [NSMutableDictionary dictionary];
+	[payload setObject:@(channelId) forKey:@"target"];
+	[payload setObject:@NO forKey:@"condensed"];
+	[self.socketClient emitEvent:@"more" withArguments:@[payload]];
 }
 
 - (void)requestNamesForChannelId:(NSInteger)channelId
@@ -174,6 +187,39 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 		withArguments:@[@{@"target": @(channelId), @"setMutedTo": @(muted)}]];
 }
 
+- (void)joinChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId
+{
+	NSString *command = [NSString stringWithFormat:@"/join %@", name];
+	[self sendCommand:command toChannelId:lobbyId];
+}
+
+- (TLNetwork *)managedNetwork
+{
+	return nil;
+}
+
+- (BOOL)isNosternProtocol
+{
+	return NO;
+}
+
+- (NSArray *)knownGroupNames
+{
+	return @[];
+}
+
+- (void)ensureJoinedChannelId:(NSInteger)channelId
+{
+}
+
+- (void)deleteGroupChannelId:(NSInteger)channelId
+{
+}
+
+- (void)deleteAllOwnedGroups
+{
+}
+
 - (BOOL)isAuthenticated
 {
 	return _isAuthenticated;
@@ -182,6 +228,11 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 - (BOOL)isReady
 {
 	return _isReady;
+}
+
+- (BOOL)isConnected
+{
+	return [self.socketClient isConnected];
 }
 
 - (void)setAuthenticated:(BOOL)authenticated

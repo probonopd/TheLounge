@@ -296,6 +296,11 @@
 		[[[NSAttributedString alloc] init] autorelease]];
 }
 
+- (BOOL)isEmpty
+{
+	return [_messageIdentifiers count] == 0;
+}
+
 - (void)scrollToBottom
 {
 	if (_usesBubbles) {

@@ -6,9 +6,13 @@
 
 #import "TLoungeSession.h"
 #import "TLoungeProtocol_4_5.h"
+#import "TLoungeProtocol_NOSTERN.h"
+#import "TLNostrSocketClient.h"
+#import "TLNostrCrypto.h"
 #import "TLServerState.h"
 #import "TLClientState.h"
 #import "TLChannel.h"
+#import "TLNetwork.h"
 #import "TLSocketIOClient.h"
 #import "TLSocketEventDispatcher.h"
 #import "TLLogger.h"
@@ -59,8 +63,24 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	BOOL _reconnectScheduled;
 	NSInteger _reconnectAttempt;
 
-	TLSocketIOClient *_socketClient;
+	id _socketClient;
 	TLConnectionState _state;
+
+	// Additional NOSTERN relay connections that share this session's model
+	// state. Indexed in parallel; each relay owns a STRIDE-sized slice of the
+	// NOSTERN id range so its channel/message ids route back to it.
+	NSMutableArray *_relayClients;
+	NSMutableArray *_relayProtocols;
+	NSMutableArray *_relayURLs;
+	NSMutableDictionary *_relayReconnectAttempts;
+	NSMutableDictionary *_relayReconnectScheduled;
+	NSMutableSet *_relayManuallyDisconnected;
+}
+@end
+
+@interface TLoungeSession ()
+{
+	NSTimer *_probeTimer;
 }
 @end
 
@@ -82,12 +102,37 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 		_serverState = [[TLServerState alloc] init];
 		_clientState = [[TLClientState alloc] init];
-		_socketClient = [[TLSocketIOClient alloc] init];
-		_socketClient.delegate = self;
 
-		_protocol = [[TLoungeProtocol_4_5 alloc] initWithSocketClient:_socketClient
-			serverState:_serverState
-			clientState:_clientState];
+		_relayClients = [[NSMutableArray alloc] init];
+		_relayProtocols = [[NSMutableArray alloc] init];
+		_relayURLs = [[NSMutableArray alloc] init];
+		_relayReconnectAttempts = [[NSMutableDictionary alloc] init];
+		_relayReconnectScheduled = [[NSMutableDictionary alloc] init];
+		_relayManuallyDisconnected = [[NSMutableSet alloc] init];
+
+		BOOL useNostr = NO;
+		NSString *scheme = [_serverURL scheme];
+		if ([scheme isEqualToString:@"ws"] || [scheme isEqualToString:@"wss"]) {
+			useNostr = YES;
+		}
+		if (useNostr) {
+			_socketClient = [[TLNostrSocketClient alloc] init];
+			[_socketClient setDelegate:self];
+			TLoungeProtocol_NOSTERN *nostr = [[TLoungeProtocol_NOSTERN alloc]
+				initWithSocketClient:(TLSocketIOClient *)_socketClient
+				serverState:_serverState
+				clientState:_clientState];
+			_protocol = nostr;
+			// The NOSTERN primary claims slot 0 of the shared id range.
+			nostr.channelIdBase = TLLoungeNostrIdBase;
+		} else {
+			_socketClient = [[TLSocketIOClient alloc] init];
+			[_socketClient setDelegate:self];
+			_protocol = [[TLoungeProtocol_4_5 alloc]
+				initWithSocketClient:(TLSocketIOClient *)_socketClient
+				serverState:_serverState
+				clientState:_clientState];
+		}
 		_protocol.delegate = self;
 	}
 	return self;
@@ -104,6 +149,12 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	[_clientState release];
 	[_socketClient release];
 	[_protocol release];
+	[_relayClients release];
+	[_relayProtocols release];
+	[_relayURLs release];
+	[_relayReconnectAttempts release];
+	[_relayReconnectScheduled release];
+	[_relayManuallyDisconnected release];
 	[super dealloc];
 }
 
@@ -131,6 +182,66 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	_remember = remember;
 }
 
+#pragma mark - Connection routing
+
+// Returns the protocol that owns a given channel id. The Lounge ids are small
+// integers below the NOSTERN base; NOSTERN ids carry their relay slot.
+- (TLoungeProtocol *)protocolForChannelId:(NSInteger)channelId
+{
+	if (channelId < (NSInteger)TLLoungeNostrIdBase) {
+		return _protocol;
+	}
+	uint64_t cid = (uint64_t)channelId;
+	uint64_t slot = (cid - TLLoungeNostrIdBase) / TLLoungeNostrIdStride;
+	if (slot == 0) {
+		return _protocol;
+	}
+	NSInteger relayIdx = (NSInteger)slot - 1;
+	if (relayIdx >= 0 && relayIdx < (NSInteger)[_relayProtocols count]) {
+		return _relayProtocols[relayIdx];
+	}
+	return _protocol;
+}
+
+// Returns the protocol managing a given network so a join lands on the right
+// relay when several are connected. Bouncer protocols return nil, so we fall
+// back to the primary.
+- (TLoungeProtocol *)protocolForNetwork:(TLNetwork *)network
+{
+	if (network == nil) {
+		return _protocol;
+	}
+	if ([_protocol respondsToSelector:@selector(managedNetwork)] &&
+		[_protocol managedNetwork] == network) {
+		return _protocol;
+	}
+	for (TLoungeProtocol *protocol in _relayProtocols) {
+		if ([protocol respondsToSelector:@selector(managedNetwork)] &&
+			[protocol managedNetwork] == network) {
+			return protocol;
+		}
+	}
+	return _protocol;
+}
+
+- (void)joinChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId
+{
+	TLNetwork *network = [self.serverState networkContainingChannel:lobbyId];
+	[[self protocolForNetwork:network] joinChannelNamed:name lobbyId:lobbyId];
+}
+
+- (TLoungeProtocol *)protocolForClient:(id)client
+{
+	if (client == _socketClient) {
+		return _protocol;
+	}
+	NSUInteger idx = [_relayClients indexOfObject:client];
+	if (idx != NSNotFound) {
+		return _relayProtocols[idx];
+	}
+	return _protocol;
+}
+
 - (void)connect
 {
 	_manualDisconnect = NO;
@@ -145,7 +256,13 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 {
 	_manualDisconnect = YES;
 	_reconnectScheduled = NO;
+	[self stopProbeTimer];
 	[NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(attemptReconnect) object:nil];
+	for (id client in _relayClients) {
+		[NSObject cancelPreviousPerformRequestsWithTarget:self
+			selector:@selector(attemptRelayReconnect:) object:client];
+		[(TLNostrSocketClient *)client close];
+	}
 	[_socketClient close];
 	[self setState:TLConnectionStateDisconnected];
 }
@@ -154,6 +271,108 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 {
 	[self connect];
 }
+
+- (void)addRelayWithURL:(NSURL *)relayURL username:(NSString *)username
+	privateKey:(NSString *)privateKey
+{
+	if (relayURL == nil) {
+		return;
+	}
+	TLNostrSocketClient *client = [[TLNostrSocketClient alloc] init];
+	[client setDelegate:self];
+	TLoungeProtocol_NOSTERN *protocol = [[TLoungeProtocol_NOSTERN alloc]
+		initWithSocketClient:(TLSocketIOClient *)client
+		serverState:_serverState
+		clientState:_clientState];
+	// Each added relay gets the next slot in the shared NOSTERN id range.
+	uint64_t slot = (uint64_t)([_relayProtocols count] + 1);
+	protocol.channelIdBase = TLLoungeNostrIdBase + slot * TLLoungeNostrIdStride;
+	[protocol setUsername:username password:privateKey];
+	protocol.delegate = self;
+
+	[_relayClients addObject:client];
+	[_relayProtocols addObject:protocol];
+	[_relayURLs addObject:relayURL];
+	[client release];
+	[protocol release];
+
+	[client connectToServerURL:relayURL];
+}
+
+#pragma mark - Relay management
+
+- (NSArray<NSDictionary *> *)connectedRelays
+{
+	NSMutableArray *result = [NSMutableArray array];
+	NSString *primaryKind = [_protocol isKindOfClass:[TLoungeProtocol_NOSTERN class]]
+		? @"nostern" : @"bouncer";
+	BOOL primaryUp = (_state == TLConnectionStateReady);
+	[result addObject:@{
+		@"url": [self serverURLString] ?: @"",
+		@"connected": @(primaryUp),
+		@"kind": primaryKind,
+		@"name": _username ?: @""
+	}];
+	for (NSUInteger i = 0; i < [_relayProtocols count]; i++) {
+		NSURL *u = _relayURLs[i];
+		id client = _relayClients[i];
+		NSString *name = [[_relayProtocols objectAtIndex:i] pendingUsername] ?: @"";
+		[result addObject:@{
+			@"url": [u absoluteString] ?: @"",
+			@"connected": @([(TLNostrSocketClient *)client isConnected]),
+			@"kind": @"nostern",
+			@"name": name
+		}];
+	}
+	return result;
+}
+
+- (void)disconnectRelayWithURL:(NSURL *)url
+{
+	if (url == nil) {
+		return;
+	}
+	NSString *target = [url absoluteString];
+	for (NSUInteger i = 0; i < [_relayURLs count]; i++) {
+		if ([[[_relayURLs objectAtIndex:i] absoluteString]
+			isEqualToString:target]) {
+			id client = [_relayClients objectAtIndex:i];
+			[_relayManuallyDisconnected addObject:client];
+			[(TLNostrSocketClient *)client close];
+			[_relayReconnectScheduled removeObjectForKey:client];
+			[_relayReconnectAttempts removeObjectForKey:client];
+			[_relayClients removeObjectAtIndex:i];
+			[_relayProtocols removeObjectAtIndex:i];
+			[_relayURLs removeObjectAtIndex:i];
+			return;
+		}
+	}
+}
+
+- (NSString *)nosternPublicKeyHex
+{
+	for (TLoungeProtocol_NOSTERN *p in _relayProtocols) {
+		NSString *hex = [p nosternPublicKeyHex];
+		if ([hex length] > 0) {
+			return hex;
+		}
+	}
+	if ([_protocol isKindOfClass:[TLoungeProtocol_NOSTERN class]]) {
+		return [(TLoungeProtocol_NOSTERN *)_protocol nosternPublicKeyHex];
+	}
+	return nil;
+}
+
+- (NSString *)nosternPublicKeyNpub
+{
+	NSString *hex = [self nosternPublicKeyHex];
+	if ([hex length] == 0) {
+		return nil;
+	}
+	return [TLNostrCrypto npubFromPubkeyHex:hex];
+}
+
+#pragma mark - Reconnect (primary)
 
 - (void)attemptReconnect
 {
@@ -187,6 +406,52 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 		(long)_reconnectAttempt];
 	[self setState:TLConnectionStateReconnecting];
 	[self performSelector:@selector(attemptReconnect) withObject:nil afterDelay:delay];
+	// Start a fast probe that tries to reconnect every 3 seconds. If the
+	// network returns before the backoff timer fires, this catches it early.
+	if (!_probeTimer) {
+		_probeTimer = [[NSTimer scheduledTimerWithTimeInterval:3.0
+			target:self selector:@selector(probeConnectivity:) userInfo:nil
+			repeats:YES] retain];
+	}
+}
+
+#pragma mark - Reconnect (relays)
+
+- (void)attemptRelayReconnect:(id)client
+{
+	[_relayReconnectScheduled removeObjectForKey:client];
+	if ([_relayManuallyDisconnected containsObject:client]) {
+		return;
+	}
+	NSUInteger idx = [_relayClients indexOfObject:client];
+	if (idx == NSNotFound) {
+		return;
+	}
+	[(TLNostrSocketClient *)client connectToServerURL:_relayURLs[idx]];
+}
+
+- (void)scheduleRelayReconnect:(id)client
+{
+	if ([_relayManuallyDisconnected containsObject:client]) {
+		return;
+	}
+	if ([_relayReconnectScheduled[client] boolValue]) {
+		return;
+	}
+	_relayReconnectScheduled[client] = @YES;
+	NSInteger attempt = [_relayReconnectAttempts[client] integerValue] + 1;
+	_relayReconnectAttempts[client] = @(attempt);
+
+	NSTimeInterval delay = 1.0;
+	for (NSInteger i = 1; i < attempt && delay < 30.0; i++) {
+		delay *= 2.0;
+	}
+	delay = MIN(delay, 30.0);
+	NSTimeInterval jitter = ((double)(arc4random() % 1000) / 1000.0) * 0.3 * delay;
+	delay += jitter;
+	[[TLLogger sharedLogger] info:@"Reconnecting relay in %.1f seconds (attempt %ld)", delay,
+		(long)attempt];
+	[self performSelector:@selector(attemptRelayReconnect:) withObject:client afterDelay:delay];
 }
 
 - (void)setState:(TLConnectionState)state
@@ -202,68 +467,199 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 		userInfo:@{@"state": @(state)}];
 }
 
+#pragma mark - Pending message queue
+
+- (void)flushPendingMessages
+{
+	for (TLNetwork *net in _serverState.networks) {
+		for (TLChannel *channel in net.channels) {
+			NSArray *pending = [NSArray arrayWithArray:channel.pendingMessages];
+			[channel removeAllPendingMessages];
+			for (TLMessage *msg in pending) {
+				TLoungeProtocol *proto = [self protocolForChannelId:channel.identifier];
+				if ([proto isConnected]) {
+					[proto sendMessage:msg.text toChannelId:channel.identifier];
+				} else {
+					// Connection dropped again between flush start and this message;
+					// put it back.
+					[channel addPendingMessage:msg];
+				}
+			}
+		}
+	}
+}
+
+- (void)stopProbeTimer
+{
+	if (_probeTimer) {
+		[_probeTimer invalidate];
+		[_probeTimer release];
+		_probeTimer = nil;
+	}
+}
+
+- (void)probeConnectivity:(NSTimer *)timer
+{
+	if (_manualDisconnect || _reconnectScheduled || _state != TLConnectionStateReconnecting) {
+		return;
+	}
+	// Fast path: the probe beat the backoff timer. Try connecting now.
+	[[TLLogger sharedLogger] info:@"Probe: attempting reconnect (attempt %ld)",
+		(long)_reconnectAttempt];
+	[self attemptReconnect];
+}
+
 #pragma mark - User operations
 
 - (void)sendMessage:(NSString *)text toChannelId:(NSInteger)channelId
 {
-	[self.protocol sendMessage:text toChannelId:channelId];
+	TLoungeProtocol *proto = [self protocolForChannelId:channelId];
+	if (![proto isConnected]) {
+		TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+		if (channel) {
+			TLMessage *msg = [[[TLMessage alloc] init] autorelease];
+			msg.channelId = channelId;
+			msg.text = text;
+			msg.rawText = text;
+			msg.timestamp = [NSDate date];
+			msg.type = TLMessageTypeMessage;
+			msg.self = YES;
+			msg.pending = YES;
+			TLUser *me = [[[TLUser alloc] init] autorelease];
+			me.nick = _serverState.currentUserNick;
+			if (!me.nick || [me.nick length] == 0) {
+				me.nick = _username;
+			}
+			msg.sender = me;
+			[channel addPendingMessage:msg];
+			[[NSNotificationCenter defaultCenter]
+				postNotificationName:TLLoungeMessagesDidChangeNotification
+				object:self
+				userInfo:@{@"channelId": @(channelId)}];
+		}
+		return;
+	}
+	[proto sendMessage:text toChannelId:channelId];
 }
 
 - (void)sendCommand:(NSString *)command toChannelId:(NSInteger)channelId
 {
-	[self.protocol sendCommand:command toChannelId:channelId];
+	TLoungeProtocol *proto = [self protocolForChannelId:channelId];
+	if (![proto isConnected]) {
+		TLChannel *channel = [self.serverState channelWithIdentifier:channelId];
+		if (channel) {
+			TLMessage *msg = [[[TLMessage alloc] init] autorelease];
+			msg.channelId = channelId;
+			msg.text = command;
+			msg.rawText = command;
+			msg.timestamp = [NSDate date];
+			msg.type = TLMessageTypeMessage;
+			msg.self = YES;
+			msg.pending = YES;
+			TLUser *me = [[[TLUser alloc] init] autorelease];
+			me.nick = _serverState.currentUserNick;
+			if (!me.nick || [me.nick length] == 0) {
+				me.nick = _username;
+			}
+			msg.sender = me;
+			[channel addPendingMessage:msg];
+			[[NSNotificationCenter defaultCenter]
+				postNotificationName:TLLoungeMessagesDidChangeNotification
+				object:self
+				userInfo:@{@"channelId": @(channelId)}];
+		}
+		return;
+	}
+	[proto sendCommand:command toChannelId:channelId];
 }
 
 - (void)openChannelId:(NSInteger)channelId
 {
-	_clientState.selectedChannelId = channelId;
-	[self.protocol openChannelId:channelId];
+	[[self protocolForChannelId:channelId] openChannelId:channelId];
 }
 
 - (void)requestNamesForChannelId:(NSInteger)channelId
 {
-	[self.protocol requestNamesForChannelId:channelId];
+	[[self protocolForChannelId:channelId] requestNamesForChannelId:channelId];
 }
 
 - (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
 {
-	[self.protocol loadMoreHistoryForChannelId:channelId lastId:lastId];
+	[[self protocolForChannelId:channelId] loadMoreHistoryForChannelId:channelId lastId:lastId];
 }
 
 - (void)loadMoreHistoryForChannelId:(NSInteger)channelId lastId:(NSInteger)lastId
 	query:(NSString *)query
 {
-	[self.protocol loadMoreHistoryForChannelId:channelId lastId:lastId query:query];
+	[[self protocolForChannelId:channelId] loadMoreHistoryForChannelId:channelId
+		lastId:lastId query:query];
 }
 
 - (void)searchMessagesForChannelId:(NSInteger)channelId term:(NSString *)term
 	offset:(NSInteger)offset
 {
-	[self.protocol searchMessagesForChannelId:channelId term:term offset:offset];
+	[[self protocolForChannelId:channelId] searchMessagesForChannelId:channelId
+		term:term offset:offset];
 }
 
 - (void)clearHistoryForChannelId:(NSInteger)channelId
 {
-	[self.protocol clearHistoryForChannelId:channelId];
+	[[self protocolForChannelId:channelId] clearHistoryForChannelId:channelId];
 }
 
 - (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId
 {
-	[self.protocol setMuted:muted forChannelId:channelId];
+	[[self protocolForChannelId:channelId] setMuted:muted forChannelId:channelId];
+}
+
+- (void)ensureJoinedChannelId:(NSInteger)channelId
+{
+	[[self protocolForChannelId:channelId] ensureJoinedChannelId:channelId];
+}
+
+- (void)deleteGroupChannelId:(NSInteger)channelId
+{
+	[[self protocolForChannelId:channelId] deleteGroupChannelId:channelId];
+}
+
+- (void)deleteAllOwnedGroups
+{
+	NSMutableArray *protocols = [NSMutableArray array];
+	if (_protocol != nil) {
+		[protocols addObject:_protocol];
+	}
+	for (TLoungeProtocol *protocol in _relayProtocols) {
+		[protocols addObject:protocol];
+	}
+	for (TLoungeProtocol *protocol in protocols) {
+		[protocol deleteAllOwnedGroups];
+	}
 }
 
 #pragma mark - TLSocketIOClientDelegate (network thread)
 
 - (void)socketIOClientDidConnect:(TLSocketIOClient *)client
 {
-	[self performSelectorOnMainThread:@selector(handleSocketConnected)
-		withObject:nil
-		waitUntilDone:NO];
+	if (client == _socketClient) {
+		[self performSelectorOnMainThread:@selector(handleSocketConnected)
+			withObject:nil
+			waitUntilDone:NO];
+	} else {
+		TLoungeProtocol *protocol = [self protocolForClient:client];
+		[protocol performSelectorOnMainThread:@selector(transportDidConnect)
+			withObject:nil
+			waitUntilDone:NO];
+	}
 }
 
 - (void)socketIOClient:(TLSocketIOClient *)client didReceiveEvent:(NSString *)eventName arguments:(NSArray *)arguments
 {
-	NSDictionary *payload = @{@"event": eventName, @"args": arguments ? arguments : @[]};
+	TLoungeProtocol *protocol = [self protocolForClient:client];
+	NSDictionary *payload = @{
+		@"event": eventName,
+		@"args": arguments ? arguments : @[],
+		@"protocol": protocol
+	};
 	[self performSelectorOnMainThread:@selector(handleSocketEvent:)
 		withObject:payload
 		waitUntilDone:NO];
@@ -271,17 +667,29 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 - (void)socketIOClientDidDisconnect:(TLSocketIOClient *)client
 {
-	[self performSelectorOnMainThread:@selector(handleSocketDisconnected)
-		withObject:nil
-		waitUntilDone:NO];
+	if (client == _socketClient) {
+		[self performSelectorOnMainThread:@selector(handleSocketDisconnected)
+			withObject:nil
+			waitUntilDone:NO];
+	} else {
+		[self performSelectorOnMainThread:@selector(handleRelayDisconnected:)
+			withObject:client
+			waitUntilDone:NO];
+	}
 }
 
 - (void)socketIOClient:(TLSocketIOClient *)client didFailWithError:(NSError *)error
 {
-	NSDictionary *payload = @{@"error": error};
-	[self performSelectorOnMainThread:@selector(handleSocketFailure:)
-		withObject:payload
-		waitUntilDone:NO];
+	if (client == _socketClient) {
+		NSDictionary *payload = @{@"error": error};
+		[self performSelectorOnMainThread:@selector(handleSocketFailure:)
+			withObject:payload
+			waitUntilDone:NO];
+	} else {
+		[[TLLogger sharedLogger] error:@"Relay socket failure: %@",
+			[error localizedDescription]];
+		[self scheduleRelayReconnect:client];
+	}
 }
 
 #pragma mark - Main thread handlers
@@ -289,17 +697,19 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 - (void)handleSocketConnected
 {
 	[self setState:TLConnectionStateSocketConnected];
+	[self.protocol transportDidConnect];
 }
 
 - (void)handleSocketEvent:(id)payload
 {
+	TLoungeProtocol *protocol = payload[@"protocol"];
 	NSString *eventName = payload[@"event"];
 	NSArray *arguments = payload[@"args"];
 
 	// One malformed event must not take down event processing for the
 	// whole session; log it and keep going.
 	@try {
-		[self.protocol.dispatcher dispatchEvent:eventName arguments:arguments];
+		[protocol.dispatcher dispatchEvent:eventName arguments:arguments];
 	}
 	@catch (NSException *exception) {
 		[[TLLogger sharedLogger] error:@"Event '%@' failed: %@", eventName,
@@ -336,6 +746,14 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	}
 }
 
+- (void)handleRelayDisconnected:(id)client
+{
+	[[TLLogger sharedLogger] info:@"Relay disconnected: %@", [client description]];
+	TLoungeProtocol *protocol = [self protocolForClient:client];
+	[protocol resetSession];
+	[self scheduleRelayReconnect:client];
+}
+
 - (void)handleSocketFailure:(NSDictionary *)payload
 {
 	NSError *error = payload[@"error"];
@@ -353,16 +771,25 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 - (void)protocol:(TLoungeProtocol *)protocol didReceiveAuthStart:(NSNumber *)serverHash
 {
+	if (protocol != _protocol) {
+		return;
+	}
 	[self setState:TLConnectionStateAuthenticating];
 }
 
 - (void)protocolDidAuthenticate:(TLoungeProtocol *)protocol
 {
+	if (protocol != _protocol) {
+		return;
+	}
 	[self setState:TLConnectionStateInitializing];
 }
 
 - (void)protocol:(TLoungeProtocol *)protocol authenticationFailedWithError:(NSError *)error
 {
+	if (protocol != _protocol) {
+		return;
+	}
 	// A rejected stored token cannot recover on its own; drop it so the
 	// next login falls back to the password the user types.
 	if ([_password length] == 0 && [_sessionToken length] > 0) {
@@ -377,9 +804,15 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 - (void)protocolDidBecomeReady:(TLoungeProtocol *)protocol
 {
+	if (protocol != _protocol) {
+		// A relay finished loading; its networks were already announced via
+		// the per-protocol notifications, so nothing more to do here.
+		return;
+	}
 	_clientState.authenticated = YES;
 	_reconnectAttempt = 0;
 	_reconnectScheduled = NO;
+	[self stopProbeTimer];
 
 	// Persist the session token received on first login.
 	if (self.serverState.metadata[@"token"]) {
@@ -403,10 +836,15 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	[self setState:TLConnectionStateReady];
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeSessionDidBecomeReadyNotification object:self];
+	// Flush any messages the user typed while the connection was down.
+	[self flushPendingMessages];
 }
 
 - (void)protocol:(TLoungeProtocol *)protocol didFailWithError:(NSError *)error
 {
+	if (protocol != _protocol) {
+		return;
+	}
 	[self setState:TLConnectionStateProtocolError];
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeSessionErrorNotification

@@ -11,11 +11,13 @@
 @class TLClientState;
 @class TLSocketEventDispatcher;
 @class TLoungeProtocol;
+@class TLNetwork;
 
 extern NSString *const TLLoungeNetworkListDidChangeNotification;
 extern NSString *const TLLoungeChannelDidChangeNotification;
 extern NSString *const TLLoungeMessagesDidChangeNotification;
 extern NSString *const TLLoungeUserListDidChangeNotification;
+extern NSString *const TLLoungeNicknamesDidChangeNotification;
 extern NSString *const TLLoungeHistoryDidChangeNotification;
 extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 
@@ -40,6 +42,7 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 
 @property (nonatomic, readonly) BOOL isAuthenticated;
 @property (nonatomic, readonly) BOOL isReady;
+@property (nonatomic, readonly) BOOL isConnected;
 @property (nonatomic, readonly) NSString *pendingUsername;
 @property (nonatomic, readonly) NSString *pendingPassword;
 @property (nonatomic, readonly) NSString *pendingToken;
@@ -53,6 +56,12 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 
 - (void)registerEventHandlers;
 - (void)resetSession;
+
+// Called by the session once the underlying socket is open. The base class has
+// no use for it (The Lounge starts on a server `auth:start` event); a protocol
+// without such a kickoff event (e.g. NOSTERN, which drives a raw relay
+// WebSocket) overrides this to begin its own handshake and subscriptions.
+- (void)transportDidConnect;
 
 - (void)setUsername:(NSString *)username password:(NSString *)password;
 - (void)setUsername:(NSString *)username token:(NSString *)token;
@@ -77,5 +86,25 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 	offset:(NSInteger)offset;
 - (void)clearHistoryForChannelId:(NSInteger)channelId;
 - (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId;
+
+// Join (or create) a channel/group by name. The base implementation sends the
+// IRC-style `/join` command via `lobbyId`; a relay protocol (NOSTERN) overrides
+// this to manage a NIP-29 group instead.
+- (void)joinChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId;
+// The network this protocol manages, if any (nil for bouncer protocols). Used
+// to route a join request to the correct relay when several are connected.
+- (TLNetwork *)managedNetwork;
+// Used by the UI to branch behavior for relay protocols (NOSTERN) that have no
+// IRC-style channel directory to query. Defaults to NO; NOSTERN overrides YES.
+- (BOOL)isNosternProtocol;
+// Names of groups/channels this protocol currently knows about. Used to back
+// the "List all channels" action for relay protocols. Defaults to empty.
+- (NSArray *)knownGroupNames;
+// Re-sends the group join (kind 9021) for an already-known channel if needed,
+// so posting is permitted. No-op for bouncer protocols.
+- (void)ensureJoinedChannelId:(NSInteger)channelId;
+// Deletes groups we created (test hygiene). No-op for bouncer protocols.
+- (void)deleteGroupChannelId:(NSInteger)channelId;
+- (void)deleteAllOwnedGroups;
 
 @end
