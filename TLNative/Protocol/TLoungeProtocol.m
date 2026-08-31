@@ -193,6 +193,11 @@ NSString *const TLLoungeSearchResultsDidChangeNotification = @"TLLoungeSearchRes
 	[self sendCommand:command toChannelId:lobbyId];
 }
 
+- (void)joinExistingChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId
+{
+	[self joinChannelNamed:name lobbyId:lobbyId];
+}
+
 - (TLNetwork *)managedNetwork
 {
 	return nil;

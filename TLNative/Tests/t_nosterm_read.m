@@ -146,7 +146,6 @@ int main(void)
 		}
 
 		// Print last 3 with timestamps.
-		NSUInteger start = count > 3 ? count - 3 : 0;
 		NSLog(@"--- All %lu messages ---", (unsigned long)count);
 		for (NSUInteger i = 0; i < count; i++) {
 			TLMessage *m = [messages objectAtIndex:i];

@@ -1116,7 +1116,7 @@
 	// The web client also accepts bare names; pass through unchanged and let
 	// the bouncer normalize the target. Nosterm relays handle joining by
 	// creating/subscribing to a NIP-29 group instead.
-	[_session joinChannelNamed:name forLobbyId:lobbyId];
+	[_session joinExistingChannelNamed:name forLobbyId:lobbyId];
 
 	// If the join produced a channel we can see, bring it into view.
 	for (TLNetwork *network in _session.serverState.networks) {

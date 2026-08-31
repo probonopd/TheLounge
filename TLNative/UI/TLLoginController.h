@@ -14,6 +14,8 @@
 	username:(NSString *)username
 	password:(NSString *)password
 	remember:(BOOL)remember;
+@optional
+- (void)loginControllerDidRequestNosterm:(TLLoginController *)controller;
 @end
 
 @interface TLLoginController : NSWindowController
@@ -23,6 +25,7 @@
 	NSSecureTextField *_passwordField;
 	NSButton *_rememberButton;
 	NSButton *_connectButton;
+	NSButton *_nostermButton;
 	NSTextField *_statusLabel;
 	id<TLLoginControllerDelegate> _delegate;
 }

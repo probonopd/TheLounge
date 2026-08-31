@@ -289,6 +289,9 @@ static id TLObject(id value)
 	if (_closed) {
 		return NO;
 	}
+	if (_type == TLChannelTypeLobby) {
+		return NO;
+	}
 	if (_type == TLChannelTypeQuery) {
 		return YES;
 	}

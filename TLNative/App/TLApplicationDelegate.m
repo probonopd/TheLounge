@@ -41,9 +41,7 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
 	[self buildMainMenu];
-	if (![self connectWithStoredToken]) {
-		[self showLoginWindow];
-	}
+	[self connectWithStoredToken];
 }
 
 // Restores the last session directly from the stored token so a healthy
@@ -256,6 +254,12 @@
 }
 
 #pragma mark - TLLoginControllerDelegate
+
+- (void)loginControllerDidRequestNosterm:(TLLoginController *)controller
+{
+	[controller close];
+	[self connectToRelay:nil];
+}
 
 - (void)connectToRelay:(id)sender
 {

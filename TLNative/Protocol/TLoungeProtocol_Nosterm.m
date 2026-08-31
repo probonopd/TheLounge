@@ -66,6 +66,12 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	// Pending retries: event-id -> NSDictionary (event dict + channelId) for
 	// messages rejected by the relay (e.g. timing race with 9021 join).
 	NSMutableDictionary *_pendingRetries;
+	// Lobby channel for this relay: shows MOTD, connection status, /list output.
+	NSInteger _lobbyChannelId;
+	// Monotonically decreasing id counter for lobby messages so they never
+	// collide (time-based ids would collide when multiple messages are added
+	// within the same second).
+	NSInteger _lobbyMsgIdCounter;
 }
 @end
 
@@ -398,11 +404,43 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[_relayNetwork setConnected:YES];
 	[self.serverState addNetwork:_relayNetwork];
 	[self.serverState setCurrentUserNick:[self displayNameForPubkey:_pubkeyHex]];
-	// Announce the new relay network immediately so it shows up in the outline
-	// as soon as the socket opens, without waiting for the first subscription.
+
+	// Create a lobby channel so clicking the relay name in the sidebar shows
+	// MOTD and connection status (mirrors the web client's server panel).
+	_lobbyChannelId = [self channelIntIdForNostrId:@"lobby"];
+	TLChannel *lobby = [[TLChannel alloc] initWithDictionary:@{
+		@"id": @(_lobbyChannelId),
+		@"name": host,
+		@"type": @"lobby",
+		@"state": @(TLChannelStateJoined)
+	}];
+	[_relayNetwork addChannel:lobby];
+	[lobby release];
+
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeNetworkListDidChangeNotification
 		object:self];
+}
+
+- (void)addLobbyMessage:(NSString *)text
+{
+	TLChannel *lobby = [self.serverState channelWithIdentifier:_lobbyChannelId];
+	if (lobby == nil || [text length] == 0) {
+		return;
+	}
+	TLMessage *msg = [[TLMessage alloc] init];
+	msg.identifier = --_lobbyMsgIdCounter;
+	msg.channelId = _lobbyChannelId;
+	msg.text = text;
+	msg.rawText = text;
+	msg.timestamp = [NSDate date];
+	msg.type = TLMessageTypeNotice;
+	[lobby addMessage:msg];
+	[msg release];
+	[[NSNotificationCenter defaultCenter]
+		postNotificationName:TLLoungeMessagesDidChangeNotification
+		object:self
+		userInfo:@{@"channelId": @(_lobbyChannelId)}];
 }
 
 #pragma mark - Handshake / subscriptions
@@ -415,6 +453,15 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self ensureKeypair];
 	[self ensureRelayNetwork];
 	[self loadLocalStore];
+
+	// Post MOTD and connection status into the lobby so clicking the relay
+	// name shows the same info panel as the web client.
+	NSURL *relayURL = [NSURL URLWithString:[self relayURLString]];
+	NSString *host = [relayURL host];
+	[self addLobbyMessage:[NSString stringWithFormat:
+		@"Connected to wss://%@%@\n",
+		host ?: @"?", [relayURL path] ?: @"/"]];
+	[self addLobbyMessage:@"\n  Nosterm - A terminal-style Nostr chat client.\n"];
 
 	// Signal auth start to the session state machine. The actual
 	// protocolDidAuthenticate: call is deferred until either:
@@ -929,6 +976,11 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 {
 	NSLog(@"[NOSTERM] becomeReady: all subscriptions EOSE'd, becoming ready");
 	_ready = YES;
+	NSString *nick = [self displayNameForPubkey:_pubkeyHex];
+	if ([nick length] > 0) {
+		[self addLobbyMessage:[NSString stringWithFormat:
+			@"Logged in as %@.", nick]];
+	}
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeNetworkListDidChangeNotification
 		object:self];
@@ -1336,8 +1388,9 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 {
 	NSString *msg = [args count] >= 1 ? [args[0] description] : @"";
 	[[TLLogger sharedLogger] info:@"Nosterm notice: %@", msg];
-	// Surface relay-originated warnings/errors to the UI.
+	// Show relay notices in the lobby (MOTD, info) and as errors if severe.
 	if ([msg length] > 0) {
+		[self addLobbyMessage:[NSString stringWithFormat:@"*** %@", msg]];
 		NSError *error = [NSError errorWithDomain:@"TLNostermRelayDomain" code:2
 			userInfo:@{NSLocalizedDescriptionKey:
 				[NSString stringWithFormat:@"Relay: %@", msg]}];
@@ -1352,6 +1405,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[[TLLogger sharedLogger] info:@"Nosterm subscription closed: subId='%@' reason='%@'", subId, msg];
 	// A closed subscription means no events will flow for that filter.
 	if ([msg length] > 0) {
+		[self addLobbyMessage:[NSString stringWithFormat:
+			@"*** Subscription '%@' closed: %@", subId, msg]];
 		NSError *error = [NSError errorWithDomain:@"TLNostermRelayDomain" code:3
 			userInfo:@{NSLocalizedDescriptionKey:
 				[NSString stringWithFormat:@"Subscription '%@' closed: %@", subId, msg]}];
@@ -1449,11 +1504,61 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 - (void)sendCommand:(NSString *)command toChannelId:(NSInteger)channelId
 {
+	// Parse IRC-style /join and /part for Nosterm NIP-29 groups.
+	NSUInteger spaceIdx = [command rangeOfString:@" "].location;
+	NSString *verb = spaceIdx != NSNotFound
+		? [command substringToIndex:spaceIdx]
+		: command;
+	verb = [verb lowercaseString];
+
+	if ([verb isEqualToString:@"/join"]) {
+		NSString *name = spaceIdx != NSNotFound
+			? [[command substringFromIndex:spaceIdx + 1]
+				stringByTrimmingCharactersInSet:
+					[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+			: @"";
+		if ([name length] == 0) {
+			return;
+		}
+		NSInteger lobbyId = 0;
+		TLNetwork *net = [self.serverState networkContainingChannel:channelId];
+		if (net != nil && [net lobby] != nil) {
+			lobbyId = [[net lobby] identifier];
+		}
+		[self joinExistingChannelNamed:name lobbyId:lobbyId];
+		return;
+	}
+	if ([verb isEqualToString:@"/part"] || [verb isEqualToString:@"/leave"]) {
+		NSString *name = spaceIdx != NSNotFound
+			? [[command substringFromIndex:spaceIdx + 1]
+				stringByTrimmingCharactersInSet:
+					[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+			: @"";
+		if ([name length] == 0) {
+			return;
+		}
+		NSString *groupId = [self normalizeGroupId:name];
+		NSString *address = [self groupAddressForId:groupId];
+		NSNumber *intIdNum = _nostrChannelIdToInt[address];
+		if (intIdNum != nil) {
+			NSInteger cid = [intIdNum integerValue];
+			TLChannel *ch = [self.serverState channelWithIdentifier:cid];
+			if (ch != nil) {
+				[ch setState:TLChannelStateParted];
+			}
+		}
+		return;
+	}
+
 	[self sendMessage:command toChannelId:channelId];
 }
 
 - (void)openChannelId:(NSInteger)channelId
 {
+	// The lobby is a local-only status view; no relay subscription needed.
+	if (channelId == _lobbyChannelId) {
+		return;
+	}
 	NSString *address = _intToNostrChannelId[@(channelId)];
 	if (address == nil) {
 		return;
@@ -1552,6 +1657,54 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	// NIP-29 subscriptions filter on the bare group id; include the full
 	// address too for relays that index by the qualified form. Bound by the
 	// channel cursor so a rejoin replays messages missed while offline.
+	NSInteger channelId = [self channelIntIdForNostrId:address];
+	NSString *subId = [NSString stringWithFormat:@"ch-%ld", (long)channelId];
+	NSInteger since = [self cursorTimestampForChannel:channelId] + 1;
+	NSMutableDictionary *filter = [NSMutableDictionary dictionary];
+	[filter setObject:@[@(9)] forKey:@"kinds"];
+	[filter setObject:@[address, groupId] forKey:@"#h"];
+	[filter setObject:@(100) forKey:@"limit"];
+	if (since > 1) {
+		[filter setObject:@(since) forKey:@"since"];
+	}
+	[self sendReq:subId filter:filter];
+}
+
+- (void)joinExistingChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId
+{
+	NSString *groupId = [self normalizeGroupId:name];
+	if ([groupId length] == 0) {
+		return;
+	}
+	NSString *address = [self groupAddressForId:groupId];
+	[self ensureKeypair];
+	[self ensureRelayNetwork];
+
+	if (_nostrChannelIdToInt[address] == nil) {
+		NSInteger intId = [self channelIntIdForNostrId:address];
+		TLChannel *channel = [[TLChannel alloc] initWithDictionary:@{
+			@"id": @(intId),
+			@"name": name,
+			@"type": @"channel",
+			@"state": @(TLChannelStateJoined)
+		}];
+		[_relayNetwork addChannel:channel];
+		[channel release];
+		_nostrChannelIdToInt[address] = @(intId);
+		_nostrChannelIdToInt[groupId] = @(intId);
+		_intToNostrChannelId[@(intId)] = address;
+		[_nip29ChannelIds addObject:@(intId)];
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TLLoungeNetworkListDidChangeNotification
+			object:self];
+	}
+
+	// Join the group (kind 9021) so the relay lets us post and tracks
+	// membership; nostermd rejects kind 9 until a join request is seen.
+	[self sendJoinForGroupAddress:address];
+
+	// Subscribe to the group's messages. Use bare group id and full address
+	// for NIP-29 compatibility. Bound by the channel cursor for catch-up.
 	NSInteger channelId = [self channelIntIdForNostrId:address];
 	NSString *subId = [NSString stringWithFormat:@"ch-%ld", (long)channelId];
 	NSInteger since = [self cursorTimestampForChannel:channelId] + 1;

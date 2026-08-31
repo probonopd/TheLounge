@@ -230,6 +230,12 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 	[[self protocolForNetwork:network] joinChannelNamed:name lobbyId:lobbyId];
 }
 
+- (void)joinExistingChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId
+{
+	TLNetwork *network = [self.serverState networkContainingChannel:lobbyId];
+	[[self protocolForNetwork:network] joinExistingChannelNamed:name lobbyId:lobbyId];
+}
+
 - (TLoungeProtocol *)protocolForClient:(id)client
 {
 	if (client == _socketClient) {

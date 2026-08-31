@@ -116,6 +116,17 @@
 	[_connectButton setAutoresizingMask:NSViewMinXMargin | NSViewMinYMargin];
 	[contentView addSubview:_connectButton];
 
+	_nostermButton = [[NSButton alloc] initWithFrame:
+		NSMakeRect(sideMargin,
+			bottomMargin + 16.0 + 12.0, 130.0, 20.0)];
+	[_nostermButton setButtonType:NSMomentaryLightButton];
+	[_nostermButton setBezelStyle:NSRoundedBezelStyle];
+	[_nostermButton setTitle:@"Nosterm Relay\u2026"];
+	[_nostermButton setTarget:self];
+	[_nostermButton setAction:@selector(openNosterm:)];
+	[_nostermButton setAutoresizingMask:NSViewMaxXMargin | NSViewMinYMargin];
+	[contentView addSubview:_nostermButton];
+
 	_statusLabel = [[NSTextField alloc] initWithFrame:
 		NSMakeRect(sideMargin, bottomMargin,
 			width - 2.0 * sideMargin, 16.0)];
@@ -221,6 +232,13 @@
 	[self focusFirstEmptyField];
 }
 
+- (void)openNosterm:(id)sender
+{
+	if ([_delegate respondsToSelector:@selector(loginControllerDidRequestNosterm:)]) {
+		[_delegate loginControllerDidRequestNosterm:self];
+	}
+}
+
 - (void)dealloc
 {
 	[_serverField release];
@@ -228,6 +246,7 @@
 	[_passwordField release];
 	[_rememberButton release];
 	[_connectButton release];
+	[_nostermButton release];
 	[_statusLabel release];
 	[super dealloc];
 }

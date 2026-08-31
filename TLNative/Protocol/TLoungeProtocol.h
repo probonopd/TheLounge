@@ -91,6 +91,9 @@ extern NSString *const TLLoungeSearchResultsDidChangeNotification;
 // IRC-style `/join` command via `lobbyId`; a relay protocol (Nosterm) overrides
 // this to manage a NIP-29 group instead.
 - (void)joinChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId;
+// Join an existing NIP-29 group without creating it (no kind 39000 published).
+// Used by `/join` to avoid creating duplicate groups on the relay.
+- (void)joinExistingChannelNamed:(NSString *)name lobbyId:(NSInteger)lobbyId;
 // The network this protocol manages, if any (nil for bouncer protocols). Used
 // to route a join request to the correct relay when several are connected.
 - (TLNetwork *)managedNetwork;

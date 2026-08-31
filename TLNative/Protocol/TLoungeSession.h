@@ -59,6 +59,8 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state);
 // Joins (or creates, for Nosterm) a channel/group on the network that owns the
 // given lobby id, routing to the protocol that manages that network.
 - (void)joinChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId;
+// Joins an existing channel without creating it (no kind 39000 for Nosterm).
+- (void)joinExistingChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId;
 
 - (void)sendMessage:(NSString *)text toChannelId:(NSInteger)channelId;
 - (void)sendCommand:(NSString *)command toChannelId:(NSInteger)channelId;
