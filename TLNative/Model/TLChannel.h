@@ -48,6 +48,7 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 @property (nonatomic, assign) NSInteger numUsers;
 @property (nonatomic, assign) NSInteger totalMessages;
 @property (nonatomic, strong) NSMutableArray<TLMessage *> *messages;
+@property (nonatomic, strong) NSMutableArray<TLMessage *> *pendingMessages;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, TLUser *> *users;
 @property (nonatomic, strong) NSMutableDictionary *metadata;
 
@@ -72,6 +73,11 @@ TLChannelType TLChannelTypeFromString(NSString *s);
 - (void)addMessage:(TLMessage *)message;
 - (void)removeMessageWithIdentifier:(NSInteger)identifier;
 - (void)prependMessages:(NSArray<TLMessage *> *)messages;
+
+- (void)addPendingMessage:(TLMessage *)message;
+- (void)removePendingMessage:(TLMessage *)message;
+- (void)removeAllPendingMessages;
+- (BOOL)hasPendingMessages;
 
 - (BOOL)isChannel;
 - (BOOL)isQuery;

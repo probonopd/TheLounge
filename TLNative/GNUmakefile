@@ -19,7 +19,7 @@ ADDITIONAL_CPPFLAGS += -I$(CURDIR)/App -I$(CURDIR)/UI -I$(CURDIR)/Model \
 # naming heuristic; the names are correct for this project.
 ADDITIONAL_OBJCFLAGS += -Wno-objc-property-matches-cocoa-ownership-rule
 
-ADDITIONAL_GUI_LIBS += -lcurl
+ADDITIONAL_GUI_LIBS += -lcurl -lcrypto
 
 # App icon is placed in Resources/ of the .app bundle.
 TheLounge_RESOURCE_FILES = TheLounge.png

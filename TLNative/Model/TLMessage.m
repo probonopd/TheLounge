@@ -93,6 +93,7 @@ TLMessageType TLMessageTypeFromString(NSString *s)
 		_statusmsgGroup = @"";
 		_params = [[NSArray alloc] init];
 		_metadata = [[NSMutableDictionary alloc] init];
+		_pending = NO;
 	}
 	return self;
 }

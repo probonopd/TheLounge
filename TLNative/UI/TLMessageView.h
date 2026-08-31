@@ -45,6 +45,10 @@
 - (void)clear;
 - (void)scrollToBottom;
 
+// YES when no messages are currently rendered, i.e. the transcript still shows
+// nothing for the selected channel (before its first history page arrives).
+- (BOOL)isEmpty;
+
 // NO when the transcript is shorter than the visible area, so there is
 // nothing to scroll; callers use this to fetch older messages instead of
 // waiting for a scroll-to-top that can never happen.

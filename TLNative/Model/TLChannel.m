@@ -62,6 +62,7 @@ TLChannelType TLChannelTypeFromString(NSString *s)
 		_numUsers = 0;
 		_totalMessages = 0;
 		_messages = [[NSMutableArray alloc] init];
+		_pendingMessages = [[NSMutableArray alloc] init];
 		_users = [[NSMutableDictionary alloc] init];
 		_metadata = [[NSMutableDictionary alloc] init];
 	}
@@ -229,7 +230,21 @@ static id TLObject(id value)
 		[_messages replaceObjectAtIndex:idx withObject:message];
 		return;
 	}
-	[_messages addObject:message];
+	// Keep the transcript ordered by timestamp ascending (oldest at the top,
+	// newest at the bottom, like IRC). Nostr relays may deliver a historical
+	// backfill subscription newest-first, so insert at the correct position
+	// rather than always appending.
+	NSInteger insertIdx = (NSInteger)[_messages count];
+	if (message.timestamp != nil) {
+		for (NSInteger i = 0; i < (NSInteger)[_messages count]; i++) {
+			TLMessage *other = _messages[i];
+			if ([message.timestamp compare:[other timestamp]] == NSOrderedAscending) {
+				insertIdx = i;
+				break;
+			}
+		}
+	}
+	[_messages insertObject:message atIndex:insertIdx];
 }
 
 - (void)removeMessageWithIdentifier:(NSInteger)identifier
@@ -274,6 +289,9 @@ static id TLObject(id value)
 	if (_closed) {
 		return NO;
 	}
+	if (_type == TLChannelTypeLobby) {
+		return NO;
+	}
 	if (_type == TLChannelTypeQuery) {
 		return YES;
 	}
@@ -284,6 +302,26 @@ static id TLObject(id value)
 {
 	return [NSString stringWithFormat:@"<TLChannel %ld %@ (%@)>", (long)_identifier, _name,
 		TLChannelTypeToString(_type)];
+}
+
+- (void)addPendingMessage:(TLMessage *)message
+{
+	[_pendingMessages addObject:message];
+}
+
+- (void)removePendingMessage:(TLMessage *)message
+{
+	[_pendingMessages removeObject:message];
+}
+
+- (void)removeAllPendingMessages
+{
+	[_pendingMessages removeAllObjects];
+}
+
+- (BOOL)hasPendingMessages
+{
+	return [_pendingMessages count] > 0;
 }
 
 @end

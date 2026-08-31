@@ -51,6 +51,17 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state);
 - (void)disconnect;
 - (void)reconnect;
 
+// Adds a Nosterm relay connection that shares this session's server/model
+// state, so its channels appear alongside the primary connection's networks.
+- (void)addRelayWithURL:(NSURL *)relayURL username:(NSString *)username
+	privateKey:(NSString *)privateKey;
+
+// Joins (or creates, for Nosterm) a channel/group on the network that owns the
+// given lobby id, routing to the protocol that manages that network.
+- (void)joinChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId;
+// Joins an existing channel without creating it (no kind 39000 for Nosterm).
+- (void)joinExistingChannelNamed:(NSString *)name forLobbyId:(NSInteger)lobbyId;
+
 - (void)sendMessage:(NSString *)text toChannelId:(NSInteger)channelId;
 - (void)sendCommand:(NSString *)command toChannelId:(NSInteger)channelId;
 - (void)openChannelId:(NSInteger)channelId;
@@ -62,6 +73,27 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state);
 	offset:(NSInteger)offset;
 - (void)clearHistoryForChannelId:(NSInteger)channelId;
 - (void)setMuted:(BOOL)muted forChannelId:(NSInteger)channelId;
+- (void)ensureJoinedChannelId:(NSInteger)channelId;
+
+// Deletes groups the Nosterm test identity created on the relay (test hygiene).
+- (void)deleteGroupChannelId:(NSInteger)channelId;
+- (void)deleteAllOwnedGroups;
+
+// Returns the protocol managing the given network/channel (the primary bouncer
+// protocol, or a Nosterm relay protocol). Used by the UI to branch behavior.
+- (TLoungeProtocol *)protocolForNetwork:(TLNetwork *)network;
+- (TLoungeProtocol *)protocolForChannelId:(NSInteger)channelId;
+
+// Relay management (Nosterm client). Each entry is a dictionary with keys
+// "url" (NSString), "connected" (NSNumber BOOL), "kind" (NSString:
+// "nosterm" or "bouncer"), and "name" (NSString display name or @"").
+- (NSArray<NSDictionary *> *)connectedRelays;
+- (void)disconnectRelayWithURL:(NSURL *)url;
+
+// The Nosterm identity in NIP-19 form (npub), or nil when the session has no
+// Nosterm relay attached yet. Used by the identity panel.
+- (NSString *)nostermPublicKeyNpub;
+- (NSString *)nostermPublicKeyHex;
 
 - (void)persistSessionToken:(NSString *)token;
 - (NSString *)retrieveStoredToken;

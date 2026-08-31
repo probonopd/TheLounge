@@ -65,6 +65,13 @@
 	if (_state != TLWebSocketStateDisconnected) {
 		return;
 	}
+	if (_thread != nil && ![_thread isFinished]) {
+		// A previous attempt is still winding down (its thread can block
+		// inside curl_easy_perform for the connect timeout). Cancel it before
+		// starting a new thread so two runloops never race on the shared CURL
+		// handle.
+		[self close];
+	}
 	_url = [url retain];
 	_state = TLWebSocketStateConnecting;
 	_stop = NO;
@@ -196,6 +203,9 @@
 			break;
 		}
 		if (sel == 0) {
+			if (_stop) {
+				break;
+			}
 			continue;
 		}
 
@@ -330,15 +340,21 @@
 
 - (void)close
 {
+	if (_thread == nil) {
+		return;
+	}
 	_stop = YES;
 	if (_wakePipe[1] >= 0) {
 		[self wakeLoop];
 	}
-	if (_thread && ![_thread isFinished]) {
-		// Give the loop a moment to shut down cleanly.
-		for (int i = 0; i < 200 && ![_thread isFinished]; i++) {
-			[NSThread sleepForTimeInterval:0.01];
-		}
+	// The background thread can be blocked inside curl_easy_perform for up to
+	// CURLOPT_CONNECTTIMEOUT (30s) on an unreachable host. We must wait for it
+	// to finish before releasing anything: runLoop cleans up the CURL handle
+	// and URL at its very end, so once the thread has exited those ivars are
+	// safe to touch. Releasing earlier lets the still-running thread
+	// dereference freed memory and crash the process on exit.
+	for (int i = 0; i < 4000 && ![_thread isFinished]; i++) {
+		[NSThread sleepForTimeInterval:0.01];
 	}
 	[_thread release];
 	_thread = nil;

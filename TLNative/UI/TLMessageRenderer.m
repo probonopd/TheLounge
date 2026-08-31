@@ -459,13 +459,24 @@ static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItal
 		if (text && [text length] > 0) {
 			[line appendAttributedString:TLParseFormattedText(text, YES, TLDefaultTextColor())];
 		}
+		if ([message pending]) {
+			NSDictionary *dimAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
+				TLFontFor(NO, YES), NSFontAttributeName,
+				[NSColor colorWithCalibratedWhite:0.45 alpha:1.0],
+					NSForegroundColorAttributeName,
+				nil];
+			[line appendAttributedString:[[[NSAttributedString alloc] initWithString:@" [sending...]" attributes:dimAttrs] autorelease]];
+		}
 		return [line autorelease];
 	}
 	NSDate *timestamp = message.timestamp ? message.timestamp : [NSDate date];
 	NSString *nick = message.sender.nick ? message.sender.nick : @"";
+	NSColor *textColor = [message pending]
+		? [NSColor colorWithCalibratedWhite:0.45 alpha:1.0]
+		: TLDefaultTextColor();
 	NSDictionary *defAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
 		[self baseFont], NSFontAttributeName,
-		TLDefaultTextColor(), NSForegroundColorAttributeName,
+		textColor, NSForegroundColorAttributeName,
 		nil];
 	NSDictionary *nickAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
 		[self baseFont], NSFontAttributeName,
@@ -480,7 +491,15 @@ static NSAttributedString *TLParseFormattedText(NSString *text, BOOL initialItal
 	if (!display) {
 		display = @"";
 	}
-	[line appendAttributedString:TLParseFormattedText(display, NO, TLDefaultTextColor())];
+	[line appendAttributedString:TLParseFormattedText(display, NO, textColor)];
+	if ([message pending]) {
+		NSDictionary *dimAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
+			TLFontFor(NO, YES), NSFontAttributeName,
+			[NSColor colorWithCalibratedWhite:0.45 alpha:1.0],
+				NSForegroundColorAttributeName,
+			nil];
+		[line appendAttributedString:[[[NSAttributedString alloc] initWithString:@" [sending...]" attributes:dimAttrs] autorelease]];
+	}
 	return [line autorelease];
 }
 

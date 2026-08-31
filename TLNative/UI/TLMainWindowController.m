@@ -15,6 +15,7 @@
 #import "TLMessage.h"
 #import "TLUser.h"
 #import "TLPreferences.h"
+#import "TLNostermGroupListController.h"
 
 @implementation TLMainWindowController
 
@@ -209,6 +210,8 @@
 		name:TLLoungeMessagesDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(protocolUserListDidChange:)
 		name:TLLoungeUserListDidChangeNotification object:nil];
+	[center addObserver:self selector:@selector(protocolNicknamesDidChange:)
+		name:TLLoungeNicknamesDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(protocolHistoryDidChange:)
 		name:TLLoungeHistoryDidChangeNotification object:nil];
 	[center addObserver:self selector:@selector(protocolSearchResultsDidChange:)
@@ -353,6 +356,10 @@
 			[_messageView appendMessage:message];
 		}
 	}
+	// Show pending messages (typed while offline) at the bottom, dimmed.
+	for (TLMessage *message in channel.pendingMessages) {
+		[_messageView appendMessage:message];
+	}
 	[self updateHasMoreHistoryForChannelId:channel.identifier];
 	if ([_filterText length] > 0) {
 		// While filtering, the scroll-to-top handler runs a server search
@@ -366,6 +373,21 @@
 	// too short to ever reach the top by scrolling. Fetch older batches
 	// until the transcript is scrollable.
 	[self autoFillHistoryIfShortTranscript];
+}
+
+- (void)repopulateActiveChannelCoalesced
+{
+	[NSObject cancelPreviousPerformRequestsWithTarget:self
+		selector:@selector(repopulateActiveChannelNow) object:nil];
+	[self performSelector:@selector(repopulateActiveChannelNow) withObject:nil afterDelay:0.12];
+}
+
+- (void)repopulateActiveChannelNow
+{
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (channel) {
+		[self populateViewsForChannel:channel];
+	}
 }
 
 - (void)updateHasMoreHistoryForChannelId:(NSInteger)channelId
@@ -452,7 +474,30 @@
 	if (_selectedChannelId == channelId) {
 		if (message) {
 			if ([self message:message matchesFilter:_filterText]) {
+				// A historical backfill can arrive newest-first; if the new
+				// message is older than the transcript's current tail, rebuild
+				// from the (timestamp-sorted) store instead of appending.
+				TLChannel *ch = [_session.serverState channelWithIdentifier:channelId];
+				BOOL outOfOrder = NO;
+				if (ch != nil) {
+					TLMessage *last = [[ch messages] lastObject];
+					if (last != nil && message.timestamp != nil &&
+						[message.timestamp compare:[last timestamp]] == NSOrderedAscending) {
+						outOfOrder = YES;
+					}
+				}
+			if (outOfOrder) {
+				[self repopulateActiveChannelCoalesced];
+			} else {
 				[_messageView appendMessage:message];
+			}
+			}
+		} else {
+			// No specific message - pending messages were queued or flushed.
+			// Repopulate to show/hide pending indicators.
+			TLChannel *ch = [_session.serverState channelWithIdentifier:channelId];
+			if (ch) {
+				[self populateViewsForChannel:ch];
 			}
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
@@ -476,11 +521,17 @@
 	if (_selectedChannelId == channelId) {
 		TLChannel *channel = [_session.serverState channelWithIdentifier:channelId];
 		if (channel) {
-			// Backlog search replies arrive via search:results, not more, so
-			// a `more` event during filtering is unexpected; only prepend
-			// when not filtering.
+			// The first page of a freshly opened channel must show the newest
+			// message at the bottom, so repopulate and scroll down. Once the
+			// transcript already holds that channel's messages, later (older
+			// history) batches arrive via the same notification but use prepend,
+			// which keeps the current reading position in place.
 			if ([_filterText length] == 0) {
-				[_messageView prependMessages:channel.messages];
+				if ([_messageView isEmpty]) {
+					[self populateViewsForChannel:channel];
+				} else {
+					[_messageView prependMessages:channel.messages];
+				}
 			}
 		}
 		[self updateHasMoreHistoryForChannelId:channelId];
@@ -500,6 +551,17 @@
 	TLChannel *channel = [_session.serverState channelWithIdentifier:channelId];
 	if (channel) {
 		[_userListView reloadWithChannel:channel];
+	}
+}
+
+// Nostr display names (kind 0 metadata) resolve asynchronously after the
+// messages have already been rendered, so re-render the open transcript with
+// the now-resolved nicknames.
+- (void)protocolNicknamesDidChange:(NSNotification *)notification
+{
+	TLChannel *channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
+	if (channel) {
+		[self populateViewsForChannel:channel];
 	}
 }
 
@@ -535,6 +597,22 @@
 		return;
 	}
 	[_statusLabel setStringValue:TLConnectionStateDisplayString(_session.state)];
+	// Color the status label to reflect connection health at a glance.
+	switch (_session.state) {
+		case TLConnectionStateReconnecting:
+		case TLConnectionStateConnectionError:
+		case TLConnectionStateServerDisconnected:
+			[_statusLabel setTextColor:[NSColor colorWithCalibratedRed:0.85
+				green:0.35 blue:0.25 alpha:1.0]];
+			break;
+		case TLConnectionStateReady:
+			[_statusLabel setTextColor:[NSColor colorWithCalibratedRed:0.25
+				green:0.70 blue:0.35 alpha:1.0]];
+			break;
+		default:
+			[_statusLabel setTextColor:[NSColor controlTextColor]];
+			break;
+	}
 }
 
 // Rebuilds the transcript in the newly selected style; the current channel
@@ -977,6 +1055,14 @@
 
 - (void)contextMenuRunCommand:(NSString *)command onChannelId:(NSInteger)channelId
 {
+	if ([command isEqualToString:@"/list"]) {
+		TLNetwork *network =
+			[_session.serverState networkContainingChannel:channelId];
+		if ([self isNostermNetwork:network]) {
+			[self showNostermGroupListForNetwork:network];
+			return;
+		}
+	}
 	[_session sendCommand:command toChannelId:channelId];
 }
 
@@ -1028,9 +1114,19 @@
 		return;
 	}
 	// The web client also accepts bare names; pass through unchanged and let
-	// the bouncer normalize the target.
-	[_session sendCommand:[@"/join " stringByAppendingString:name]
-		toChannelId:lobbyId];
+	// the bouncer normalize the target. Nosterm relays handle joining by
+	// creating/subscribing to a NIP-29 group instead.
+	[_session joinExistingChannelNamed:name forLobbyId:lobbyId];
+
+	// If the join produced a channel we can see, bring it into view.
+	for (TLNetwork *network in _session.serverState.networks) {
+		for (TLChannel *channel in network.channels) {
+			if ([channel.name isEqualToString:name]) {
+				[self selectChannelId:channel.identifier];
+				return;
+			}
+		}
+	}
 }
 
 - (void)contextMenuEditTopicForChannelId:(NSInteger)channelId
@@ -1227,10 +1323,68 @@
 - (void)chatListChannels:(id)sender
 {
 	TLNetwork *network = [self currentChatNetwork];
-	if (network) {
-		[self contextMenuRunCommand:@"/list"
-			onChannelId:[[network lobby] identifier]];
+	if (network == nil) {
+		return;
 	}
+	if ([self isNostermNetwork:network]) {
+		[self showNostermGroupListForNetwork:network];
+		return;
+	}
+	[self contextMenuRunCommand:@"/list"
+		onChannelId:[[network lobby] identifier]];
+}
+
+// A Nosterm relay has no IRC-style channel directory, so "List all channels"
+// presents the groups we already know about instead of sending a no-op /list.
+- (BOOL)isNostermNetwork:(TLNetwork *)network
+{
+	if (network == nil) {
+		return NO;
+	}
+	TLoungeProtocol *proto = [_session protocolForNetwork:network];
+	return proto != nil && [proto isNostermProtocol];
+}
+
+- (void)showNostermGroupListForNetwork:(TLNetwork *)network
+{
+	TLoungeProtocol *proto = [_session protocolForNetwork:network];
+	NSArray *names = [proto knownGroupNames];
+	if ([names count] == 0) {
+		NSAlert *alert = [[NSAlert alloc] init];
+		[alert setMessageText:@"No NIP-29 groups known"];
+		[alert setInformativeText:
+			@"This Nosterm relay has no known NIP-29 groups yet. "
+			@"Join or create one from Join Channel."];
+		[alert addButtonWithTitle:@"OK"];
+		[alert runModal];
+		[alert release];
+		return;
+	}
+	TLNostermGroupListController *panel =
+		[[TLNostermGroupListController alloc] initWithGroupNames:names];
+	[panel.window center];
+	NSInteger result = [NSApp runModalForWindow:panel.window];
+	if (result == 1 && [panel.selectedGroupName length] > 0) {
+		[self openNostermGroupNamed:panel.selectedGroupName
+			inNetwork:network];
+	}
+	[panel close];
+	[panel release];
+}
+
+- (void)openNostermGroupNamed:(NSString *)name inNetwork:(TLNetwork *)network
+{
+	for (TLChannel *ch in [network channels]) {
+		if ([[ch name] isEqualToString:name]) {
+			// Re-send the group join in case it was missed, so posting is
+			// permitted even if the group was only discovered via metadata.
+			[_session ensureJoinedChannelId:[ch identifier]];
+			[self selectChannelId:[ch identifier]];
+			return;
+		}
+	}
+	NSInteger lobbyId = [network lobby] ? [[network lobby] identifier] : 0;
+	[_session joinChannelNamed:name forLobbyId:lobbyId];
 }
 
 - (void)chatListIgnoredUsers:(id)sender
@@ -1368,7 +1522,7 @@
 	}
 	if (action == @selector(chatCloseCurrent:)) {
 		if (!channel) {
-			return NO;
+			NO;
 		}
 		switch (channel.type) {
 		case TLChannelTypeChannel:
