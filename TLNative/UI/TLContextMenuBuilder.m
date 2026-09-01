@@ -51,6 +51,8 @@
 		[_actionDelegate contextMenuJoinPromptForLobbyId:channelId];
 	} else if ([kind isEqualToString:@"topicPrompt"]) {
 		[_actionDelegate contextMenuEditTopicForChannelId:channelId];
+	} else if ([kind isEqualToString:@"forget"]) {
+		[_actionDelegate contextMenuForgetNetworkForChannelId:channelId];
 	}
 }
 
@@ -150,6 +152,10 @@
 			title:network.connected ? @"Disconnect" : @"Connect"
 			command:network.connected ? @"/disconnect" : @"/connect"
 			channelId:channelId sink:sink];
+		NSMenuItem *forget = [self actionItemWithTitle:@"Forget"
+			action:@{@"action": @"forget", @"channelId": @(channelId)}
+			sink:sink];
+		[menu addItem:forget];
 	}
 
 	if (channel.type == TLChannelTypeChannel) {

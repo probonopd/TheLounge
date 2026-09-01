@@ -11,10 +11,17 @@
 
 @class TLoungeSession;
 @class TLMainWindowController;
+@class TLNetwork;
 
 @interface TLApplicationDelegate : NSObject <NSApplicationDelegate, TLLoginControllerDelegate,
 	TLRelayConnectControllerDelegate>
 
 @property (nonatomic, readonly) TLoungeSession *session;
+
+// Saves the current Lounge and Nosterm servers to the persistent list so
+// they can be restored on the next launch.
+- (void)saveCurrentServers;
+// Removes a specific server from the saved list by its URL string.
+- (void)removeServerFromSavedList:(NSString *)serverURLString;
 
 @end

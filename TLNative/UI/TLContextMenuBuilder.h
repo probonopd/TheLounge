@@ -22,6 +22,7 @@
 - (void)contextMenuCloseChannelId:(NSInteger)channelId isLobby:(BOOL)isLobby;
 - (void)contextMenuJoinPromptForLobbyId:(NSInteger)lobbyId;
 - (void)contextMenuEditTopicForChannelId:(NSInteger)channelId;
+- (void)contextMenuForgetNetworkForChannelId:(NSInteger)channelId;
 @end
 
 @interface TLContextMenuBuilder : NSObject

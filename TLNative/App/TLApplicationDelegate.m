@@ -10,6 +10,9 @@
 #import "TLMainWindowController.h"
 #import "TLPreferencesController.h"
 #import "TLNostrSocketClient.h"
+#import "TLNetwork.h"
+#import "TLChannel.h"
+#import "TLServerState.h"
 
 @interface TLApplicationDelegate ()
 {
@@ -41,7 +44,13 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
 	[self buildMainMenu];
+	// Try the stored-token path first so the session exists before we
+	// create the main window; the window registers observers on the
+	// session at init time, so it must already be there.
 	[self connectWithStoredToken];
+	[self showMainInterface];
+	// Restore saved Nosterm relays after the primary connection is up.
+	[self restoreSavedServers];
 }
 
 // Restores the last session directly from the stored token so a healthy
@@ -141,10 +150,25 @@
 
 	[chatMenu addItemWithTitle:@"Connect"
 		action:@selector(chatToggleConnection:) keyEquivalent:@""];
-	[chatMenu addItemWithTitle:@"Connect to Nosterm Relay…"
+	// Connect actions are owned by the app delegate; target it directly
+	// because GNUstep's nil-target responder chain (firstResponder -> window
+	// -> app) does not reach the app delegate.
+	NSMenuItem *mi;
+	mi = [[NSMenuItem alloc] initWithTitle:@"Connect to Nosterm Relay…"
 		action:@selector(connectToRelay:) keyEquivalent:@""];
-	[chatMenu addItemWithTitle:@"Connect to Nosterm Demo Relay"
+	[mi setTarget:self];
+	[chatMenu addItem:mi];
+	[mi release];
+	mi = [[NSMenuItem alloc] initWithTitle:@"Connect to Nosterm Demo Relay"
 		action:@selector(connectToDemoRelay:) keyEquivalent:@""];
+	[mi setTarget:self];
+	[chatMenu addItem:mi];
+	[mi release];
+	mi = [[NSMenuItem alloc] initWithTitle:@"Connect to The Lounge…"
+		action:@selector(connectToLounge:) keyEquivalent:@""];
+	[mi setTarget:self];
+	[chatMenu addItem:mi];
+	[mi release];
 	[chatMenu addItemWithTitle:@"Remove Network…"
 		action:@selector(chatRemoveNetwork:) keyEquivalent:@""];
 	[chatMenu addItem:[NSMenuItem separatorItem]];
@@ -263,6 +287,7 @@
 
 - (void)connectToRelay:(id)sender
 {
+	NSLog(@"[NOSTERM-APP] connectToRelay: FIRED sender=%@", sender);
 	// Works with or without an existing bouncer session: if none exists yet,
 	// the submitted relay becomes the primary Nosterm connection (see
 	// relayController:didSubmitRelayURL:), otherwise it is added alongside.
@@ -300,13 +325,24 @@
 - (void)connectToNostermServer:(NSURL *)serverURL username:(NSString *)username
 {
 	NSLog(@"[NOSTERM-APP] connectToNostermServer: %@ username=%@", serverURL, username);
+	// Stash the old window controller so we can close it after the new one
+	// is on screen, avoiding last-window-closed termination.
+	TLMainWindowController *oldController = [_mainWindowController retain];
+	_mainWindowController = nil;
 	[_session release];
 	_session = [[TLoungeSession alloc] initWithServerURL:serverURL username:username ?: @"guest"];
 	[self registerSessionObservers];
 	if (_loginController) {
 		[_loginController close];
 	}
+	// Show the new main window first so there is always at least one window.
+	[self showMainInterface];
 	[_session connect];
+	// Now safe to close the old window.
+	if (oldController) {
+		[[oldController window] close];
+		[oldController release];
+	}
 }
 
 - (void)loginController:(TLLoginController *)controller
@@ -315,6 +351,8 @@
 	password:(NSString *)password
 	remember:(BOOL)remember
 {
+	TLMainWindowController *oldController = [_mainWindowController retain];
+	_mainWindowController = nil;
 	[_session release];
 	_session = [[TLoungeSession alloc] initWithServerURL:serverURL username:username];
 
@@ -331,8 +369,15 @@
 
 	[self registerSessionObservers];
 
+	// Show the new main window before connecting so there is always at
+	// least one window on screen (avoids last-window-closed termination).
+	[self showMainInterface];
 	[controller setStatusText:@"Connecting..."];
 	[_session connect];
+	if (oldController) {
+		[[oldController window] close];
+		[oldController release];
+	}
 }
 
 - (void)registerSessionObservers
@@ -351,7 +396,8 @@
 	// Relay connections create their own session when none exists yet, so these
 	// are always available.
 	if ([item action] == @selector(connectToRelay:) ||
-		[item action] == @selector(connectToDemoRelay:)) {
+		[item action] == @selector(connectToDemoRelay:) ||
+		[item action] == @selector(connectToLounge:)) {
 		return YES;
 	}
 	return YES;
@@ -363,7 +409,7 @@
 // session exists, otherwise the relay is added to the current session.
 - (void)connectToDemoRelay:(id)sender
 {
-	NSLog(@"[NOSTERM-APP] connectToDemoRelay: session=%@", _session ? @"exists" : @"nil");
+	NSLog(@"[NOSTERM-APP] connectToDemoRelay: FIRED sender=%@ session=%@", sender, _session ? @"exists" : @"nil");
 	NSURL *relayURL = [NSURL URLWithString:TLLoungeNostermDefaultRelayURL];
 	if (_session != nil && [self isRelayConnected:relayURL]) {
 		return;
@@ -373,6 +419,13 @@
 		return;
 	}
 	[_session addRelayWithURL:relayURL username:_session.username privateKey:nil];
+}
+
+// Shows the login window so the user can enter The Lounge bouncer credentials.
+- (void)connectToLounge:(id)sender
+{
+	NSLog(@"[NOSTERM-APP] connectToLounge: FIRED sender=%@", sender);
+	[self showLoginWindow];
 }
 
 // Whether the given relay URL is already the primary or an added relay of the
@@ -526,12 +579,192 @@
 	// Drop the Dock badge before tearing down so no stale unread count is
 	// left on the icon after the app is gone.
 	[_mainWindowController clearDockBadge];
+	[self saveCurrentServers];
 	[_session disconnect];
 }
 
 - (TLoungeSession *)session
 {
 	return _session;
+}
+
+#pragma mark - Saved servers persistence
+
+// Returns the path to the saved-servers plist in Application Support.
+- (NSString *)savedServersFilePath
+{
+	NSString *appSupport = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory,
+		NSUserDomainMask, YES) firstObject];
+	NSString *dir = [appSupport stringByAppendingPathComponent:@"The Lounge"];
+	if (![[NSFileManager defaultManager] fileExistsAtPath:dir]) {
+		[[NSFileManager defaultManager] createDirectoryAtPath:dir
+			withIntermediateDirectories:YES
+			attributes:@{NSFilePosixPermissions: @0700}
+			error:NULL];
+	}
+	return [dir stringByAppendingPathComponent:@"saved-servers.plist"];
+}
+
+// Returns the saved-servers array from disk, or an empty array.
+- (NSMutableArray *)loadSavedServersList
+{
+	NSString *path = [self savedServersFilePath];
+	NSArray *list = [NSArray arrayWithContentsOfFile:path];
+	if (![list isKindOfClass:[NSArray class]]) {
+		return [NSMutableArray array];
+	}
+	return [list mutableCopy];
+}
+
+// Writes the saved-servers array to disk.
+- (void)persistSavedServersList:(NSArray *)list
+{
+	NSError *error = nil;
+	[list writeToFile:[self savedServersFilePath] atomically:YES];
+	if (error) {
+		NSLog(@"[APP] Failed to save servers: %@", [error localizedDescription]);
+	}
+}
+
+// Saves the current Lounge bouncer and all Nosterm relays to the saved-servers
+// list so they can be restored on the next launch.
+- (void)saveCurrentServers
+{
+	if (_session == nil) {
+		return;
+	}
+	NSMutableArray *saved = [NSMutableArray array];
+
+	// The primary connection: either a Lounge bouncer or a Nosterm relay.
+	BOOL isPrimaryNosterm = [[_session protocol] isNostermProtocol];
+	NSString *primaryKind = isPrimaryNosterm ? @"nosterm" : @"bouncer";
+	NSString *primaryURL = [_session serverURLString];
+	NSString *primaryUser = [_session username];
+	NSString *primaryToken = @"";
+	if (!isPrimaryNosterm) {
+		// For Lounge bouncer, persist the token for reconnection.
+		NSString *storedToken = [_session retrieveStoredToken];
+		if ([storedToken length] > 0) {
+			primaryToken = storedToken;
+		} else if (_session.serverState.metadata[@"token"]) {
+			primaryToken = _session.serverState.metadata[@"token"];
+		}
+	}
+	if ([primaryURL length] > 0) {
+		NSMutableDictionary *entry = [NSMutableDictionary dictionaryWithDictionary:@{
+			@"kind": primaryKind,
+			@"url": primaryURL,
+			@"username": primaryUser ?: @""
+		}];
+		if ([primaryToken length] > 0) {
+			entry[@"token"] = primaryToken;
+		}
+		[saved addObject:entry];
+	}
+
+	// Additional Nosterm relays.
+	for (NSDictionary *relay in [_session connectedRelays]) {
+		NSString *kind = relay[@"kind"];
+		if ([kind isEqualToString:@"bouncer"]) {
+			continue; // Already saved as primary.
+		}
+		NSString *url = relay[@"url"];
+		if ([url length] == 0) {
+			continue;
+		}
+		[saved addObject:@{
+			@"kind": @"nosterm",
+			@"url": url,
+			@"username": relay[@"name"] ?: @""
+		}];
+	}
+
+	[self persistSavedServersList:saved];
+	NSLog(@"[APP] Saved %lu server(s) to disk", (unsigned long)[saved count]);
+}
+
+// Removes a specific server from the saved list by its URL string.
+- (void)removeServerFromSavedList:(NSString *)serverURLString
+{
+	if ([serverURLString length] == 0) {
+		return;
+	}
+	NSMutableArray *saved = [self loadSavedServersList];
+	NSMutableArray *updated = [NSMutableArray array];
+	for (NSDictionary *entry in saved) {
+		if (![entry[@"url"] isEqualToString:serverURLString]) {
+			[updated addObject:entry];
+		}
+	}
+	[self persistSavedServersList:updated];
+	NSLog(@"[APP] Removed server %@ from saved list", serverURLString);
+}
+
+// Restores saved Lounge bouncer and Nosterm relays on launch. Called after
+// the main window is on screen so there is always at least one window.
+- (void)restoreSavedServers
+{
+	NSMutableArray *saved = [self loadSavedServersList];
+	if ([saved count] == 0) {
+		return;
+	}
+
+	NSLog(@"[APP] Restoring %lu saved server(s)", (unsigned long)[saved count]);
+
+	// Restore the primary connection first (Lounge bouncer or Nosterm relay).
+	NSDictionary *primary = [saved objectAtIndex:0];
+	NSString *kind = primary[@"kind"];
+	NSString *url = primary[@"url"];
+	NSString *username = primary[@"username"];
+
+	if ([kind isEqualToString:@"bouncer"]) {
+		// Lounge bouncer: try the stored-token path.
+		NSURL *serverURL = [NSURL URLWithString:url];
+		if (serverURL && [[serverURL host] length] > 0 && [username length] > 0) {
+			TLoungeSession *session = [[TLoungeSession alloc]
+				initWithServerURL:serverURL username:username];
+			NSString *storedToken = [session retrieveStoredToken];
+			// Fall back to the token persisted in the saved-servers list.
+			if ([storedToken length] == 0) {
+				storedToken = primary[@"token"];
+			}
+			if ([storedToken length] > 0) {
+				[_session release];
+				_session = session;
+				[_session setSessionToken:storedToken];
+				[self registerSessionObservers];
+				_autoConnectAttempt = YES;
+				[_session connect];
+			} else {
+				[session release];
+			}
+		}
+	} else if ([kind isEqualToString:@"nosterm"]) {
+		// Nosterm relay as primary: only restore if no session exists yet.
+		if (_session == nil) {
+			NSURL *serverURL = [NSURL URLWithString:url];
+			if (serverURL && [[serverURL host] length] > 0) {
+				[self connectToNostermServer:serverURL username:username ?: @"guest"];
+			}
+		}
+	}
+
+	// Restore additional Nosterm relays (skip index 0, already handled).
+	for (NSUInteger i = 1; i < [saved count]; i++) {
+		NSDictionary *entry = [saved objectAtIndex:i];
+		if ([entry[@"kind"] isEqualToString:@"nosterm"]) {
+			NSString *relayURL = entry[@"url"];
+			NSString *relayUser = entry[@"username"];
+			if ([relayURL length] > 0 && _session != nil) {
+				NSURL *serverURL = [NSURL URLWithString:relayURL];
+				if (serverURL) {
+					[_session addRelayWithURL:serverURL
+						username:relayUser ?: @""
+						privateKey:nil];
+				}
+			}
+		}
+	}
 }
 
 @end

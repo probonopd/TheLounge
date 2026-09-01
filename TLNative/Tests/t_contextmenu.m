@@ -106,6 +106,7 @@ int main(void)
 		PASS(MenuHasTitle(menu, @"List ignored users"), "lobby has /ignorelist item");
 		PASS(MenuHasTitle(menu, @"Disconnect"), "connected lobby offers Disconnect");
 		PASS(!MenuHasTitle(menu, @"Connect"), "connected lobby hides Connect");
+		PASS(MenuHasTitle(menu, @"Forget"), "lobby has Forget item");
 		PASS(MenuHasTitle(menu, @"Mute network"), "unmuted lobby offers Mute");
 		PASS([[titles lastObject] isEqualToString:@"Remove"], "lobby close label is Remove");
 		PASS(!MenuHasTitle(menu, @"Leave"), "no Leave on lobby");

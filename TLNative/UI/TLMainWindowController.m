@@ -16,6 +16,7 @@
 #import "TLUser.h"
 #import "TLPreferences.h"
 #import "TLNostermGroupListController.h"
+#import "TLApplicationDelegate.h"
 
 @implementation TLMainWindowController
 
@@ -727,7 +728,12 @@
 
 - (void)setWindowTitle
 {
-	NSString *title = [self serverHostname];
+	NSString *title = nil;
+	if (_session.serverURLString.length > 0) {
+		title = [self serverHostname];
+	} else {
+		title = @"The Lounge";
+	}
 	TLChannel *channel = nil;
 	if (_selectedChannelId > 0) {
 		channel = [_session.serverState channelWithIdentifier:_selectedChannelId];
@@ -1147,6 +1153,41 @@
 		toChannelId:channelId];
 }
 
+- (void)contextMenuForgetNetworkForChannelId:(NSInteger)channelId
+{
+	TLNetwork *network = [_session.serverState networkContainingChannel:channelId];
+	if (!network) {
+		return;
+	}
+	NSString *name = network.name ?: @"this server";
+	if (![self confirmTitled:@"Forget server"
+		message:[NSString stringWithFormat:
+			@"Are you sure you want to forget %@? It will be removed from the sidebar "
+			"and will not reconnect on next launch.", name]
+		button:@"Forget"]) {
+		return;
+	}
+	TLoungeProtocol *proto = [_session protocolForNetwork:network];
+	if ([proto isNostermProtocol]) {
+		// Nosterm relay: find the matching relay URL and disconnect.
+		for (NSDictionary *relay in [_session connectedRelays]) {
+			NSURL *url = [NSURL URLWithString:relay[@"url"]];
+			if (url && [[relay objectForKey:@"kind"] isEqualToString:@"nosterm"]) {
+				// Match by network name (relay display name).
+				if ([relay[@"name"] isEqualToString:network.name]) {
+					[[NSApp delegate] removeServerFromSavedList:relay[@"url"]];
+					[_session disconnectRelayWithURL:url];
+					return;
+				}
+			}
+		}
+	} else {
+		// Lounge bouncer: remove from saved list and disconnect.
+		[[NSApp delegate] removeServerFromSavedList:[_session serverURLString]];
+		[_session sendCommand:@"/quit" toChannelId:channelId];
+	}
+}
+
 #pragma mark - Context menu prompts
 
 - (BOOL)confirmTitled:(NSString *)title message:(NSString *)message
@@ -1522,7 +1563,7 @@
 	}
 	if (action == @selector(chatCloseCurrent:)) {
 		if (!channel) {
-			NO;
+			return NO;
 		}
 		switch (channel.type) {
 		case TLChannelTypeChannel:
@@ -1551,6 +1592,12 @@
 		if (action != @selector(chatSetMode:)) {
 			[menuItem setTitle:[menuItem.title stringByReplacingOccurrencesOfString:
 				@"Selected User" withString:_selectedUserNick]];
+		}
+		// Kick and mode have additional rank checks below; Whois, Ignore,
+		// Query are simply enabled when a user is selected.
+		if (action != @selector(chatKickSelectedUser:) &&
+			action != @selector(chatSetMode:)) {
+			return YES;
 		}
 	}
 
@@ -1599,7 +1646,16 @@
 		return rankOk && stateOk;
 	}
 
-	return YES;
+	// Actions forwarded to the app delegate (menu items target it directly).
+	if (action == @selector(connectToRelay:) ||
+		action == @selector(connectToDemoRelay:) ||
+		action == @selector(connectToLounge:)) {
+		return YES;
+	}
+
+	// Actions not implemented here must fall through so the responder chain
+	// can deliver them to the app delegate (e.g. connectToRelay:).
+	return NO;
 }
 
 - (BOOL)windowShouldClose:(id)sender
