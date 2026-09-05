@@ -10,7 +10,23 @@ NSString *const TLBubbleStyleDidChangeNotification =
 	@"TLBubbleStyleDidChangeNotification";
 
 static NSString * const TLUseBubblesKey = @"TLUseBubbleStyle";
+static NSString * const TLPlaySoundOnIncomingMessagesKey = @"TLPlaySoundOnIncomingMessages";
 static NSString * const TLLastChannelsKey = @"TLLastOpenChannels";
+
+@interface TLPreferences : NSObject
++ (void)initialize;
+@end
+
+@implementation TLPreferences
+
++ (void)initialize
+{
+	if (self == [TLPreferences class]) {
+		NSDictionary *defaults = [NSDictionary dictionaryWithObjectsAndKeys:
+			@YES, TLPlaySoundOnIncomingMessagesKey, nil];
+		[[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
+	}
+}
 
 BOOL TLPreferencesUseBubbles(void)
 {
@@ -27,6 +43,17 @@ void TLPreferencesSetUseBubbles(BOOL flag)
 	[defaults setBool:flag forKey:TLUseBubblesKey];
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLBubbleStyleDidChangeNotification object:nil];
+}
+
+BOOL TLPreferencesPlaySoundOnIncomingMessages(void)
+{
+	return [[NSUserDefaults standardUserDefaults] boolForKey:TLPlaySoundOnIncomingMessagesKey];
+}
+
+void TLPreferencesSetPlaySoundOnIncomingMessages(BOOL flag)
+{
+	NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+	[defaults setBool:flag forKey:TLPlaySoundOnIncomingMessagesKey];
 }
 
 NSDictionary *TLPreferencesLastChannelForServer(NSString *server)
@@ -57,3 +84,5 @@ void TLPreferencesSetLastChannelId(NSInteger identifier
 		forKey:server];
 	[defaults setObject:all forKey:TLLastChannelsKey];
 }
+
+@end

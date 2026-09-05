@@ -17,6 +17,10 @@ extern NSString *const TLBubbleStyleDidChangeNotification;
 BOOL TLPreferencesUseBubbles(void);
 void TLPreferencesSetUseBubbles(BOOL flag);
 
+// Sound on incoming public/private messages.
+BOOL TLPreferencesPlaySoundOnIncomingMessages(void);
+void TLPreferencesSetPlaySoundOnIncomingMessages(BOOL flag);
+
 // Last open channel per server, so reconnecting to the same server reopens
 // the same tab. The stored dictionary has an "id" (NSInteger) and a "name"
 // (NSString) entry; the id is authoritative, the name is the fallback when

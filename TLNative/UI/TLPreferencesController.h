@@ -11,6 +11,7 @@
 @interface TLPreferencesController : NSWindowController
 {
 	NSButton *_bubblesCheckbox;
+	NSButton *_soundCheckbox;
 }
 
 @end

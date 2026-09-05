@@ -46,6 +46,11 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	NSMutableDictionary *_channelCursors;
 	NSMutableSet *_seenEventIds;
 	NSString *_storePath;
+	// Persisted channel addresses (NIP-29 group addresses and NIP-28 event
+	// IDs) loaded from disk on startup so channels reappear in the sidebar
+	// before the relay re-streams their kind-39000/kind-40 events.
+	NSMutableArray *_persistedChannelAddresses;
+	NSMutableSet *_restoredChannelAddresses;
 	// Event id of the kind 39000 we published when creating a group, so the
 	// group can be deleted (kind 5) on test teardown.
 	NSMutableDictionary *_groupEventIds;
@@ -103,6 +108,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		_requestedMeta = [[NSMutableSet alloc] init];
 		_localMessageById = [[NSMutableDictionary alloc] init];
 		_pendingRetries = [[NSMutableDictionary alloc] init];
+		_persistedChannelAddresses = [[NSMutableArray alloc] init];
+		_restoredChannelAddresses = [[NSMutableSet alloc] init];
 	}
 	return self;
 }
@@ -125,6 +132,8 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[_requestedMeta release];
 	[_localMessageById release];
 	[_pendingRetries release];
+	[_persistedChannelAddresses release];
+	[_restoredChannelAddresses release];
 	[_privateKey release];
 	[_pubkeyHex release];
 	[_authChallenge release];
@@ -453,6 +462,10 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[self ensureKeypair];
 	[self ensureRelayNetwork];
 	[self loadLocalStore];
+	// Pre-populate the channel maps from persisted addresses so
+	// resubscribeAllChannels opens subscriptions immediately, even before the
+	// relay re-streams kind-39000/kind-40 events for these channels.
+	[self restorePersistedChannels];
 
 	// Post MOTD and connection status into the lobby so clicking the relay
 	// name shows the same info panel as the web client.
@@ -473,15 +486,20 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 
 	NSLog(@"[NOSTERM] transportDidConnect: sending initial subscriptions");
 	[self sendReq:@"nostr-channels" filter:@{@"kinds": @[@(40)], @"limit": @(100)}];
-	[self sendReq:@"nostr-groups" filter:@{@"kinds": @[@(39000), @(39002)], @"limit": @(200)}];
+	// nostermd mishandles multi-kind filters (["kinds":[39000,39002]] streams
+	// only rosters, and pairing 39000 with an unrelated kind streams only that
+	// kind), so the group directory and the rosters get one REQ each.
+	[self sendReq:@"nostr-groups" filter:@{@"kinds": @[@(39000)], @"limit": @(200)}];
+	[self sendReq:@"nostr-group-members" filter:@{@"kinds": @[@(39002)], @"limit": @(200)}];
 	[self sendReq:@"nostr-msgs" filter:@{@"kinds": @[@(42)], @"limit": @(200)}];
 	// Bulk kind-0 metadata: many relays do not serve individual per-author
 	// subscriptions for kind 0, but they do include kind 0 in a catch-all.
 	// This covers display_name resolution for active users on the relay.
 	[self sendReq:@"nostr-meta" filter:@{@"kinds": @[@(0)], @"limit": @(200)}];
 	// Only bootstrap subscriptions that gate readiness go into _pendingEose.
-	// nostr-groups is excluded: it streams hundreds of 39002 events and would
-	// block becomeReady indefinitely on a busy relay.
+	// The group subscriptions are excluded: nostr-group-members streams
+	// hundreds of 39002 events and would block becomeReady indefinitely on a
+	// busy relay.
 	[_pendingEose addObject:@"nostr-channels"];
 	[_pendingEose addObject:@"nostr-msgs"];
 
@@ -573,20 +591,92 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 - (void)loadLocalStore
 {
 	[_channelCursors removeAllObjects];
+	[_persistedChannelAddresses removeAllObjects];
 	NSDictionary *store = [NSDictionary dictionaryWithContentsOfFile:[self storePath]];
 	if (store == nil) {
 		return;
 	}
 	NSDictionary *cursors = store[@"cursors"];
-	if (![cursors isKindOfClass:[NSDictionary class]]) {
+	if ([cursors isKindOfClass:[NSDictionary class]]) {
+		for (id key in cursors) {
+			NSNumber *ck = [key isKindOfClass:[NSNumber class]] ? key : @([key integerValue]);
+			id val = [cursors objectForKey:key];
+			if ([val isKindOfClass:[NSDictionary class]]) {
+				[_channelCursors setObject:val forKey:ck];
+			}
+		}
+	}
+	// Load persisted channel addresses so channels reappear in the sidebar
+	// before the relay re-streams their kind-39000/kind-40 events.
+	NSArray *channels = store[@"joinedChannels"];
+	if ([channels isKindOfClass:[NSArray class]]) {
+		for (id addr in channels) {
+			if ([addr isKindOfClass:[NSString class]] && [addr length] > 0) {
+				[_persistedChannelAddresses addObject:addr];
+			}
+		}
+	}
+}
+
+// Pre-populates the channel maps and creates placeholder channels from the
+// persisted joinedChannels list so the sidebar shows them immediately on
+// relaunch.  The relay will later re-stream kind-39000/kind-40 events which
+// will update the channel names with their actual display names.
+- (void)restorePersistedChannels
+{
+	if ([_persistedChannelAddresses count] == 0) {
 		return;
 	}
-	for (id key in cursors) {
-		NSNumber *ck = [key isKindOfClass:[NSNumber class]] ? key : @([key integerValue]);
-		id val = [cursors objectForKey:key];
-		if ([val isKindOfClass:[NSDictionary class]]) {
-			[_channelCursors setObject:val forKey:ck];
+	[self ensureRelayNetwork];
+	for (NSString *address in _persistedChannelAddresses) {
+		NSString *groupId = [self bareGroupIdForAddress:address];
+		BOOL alreadyKnown = (_nostrChannelIdToInt[address] != nil);
+		if (!alreadyKnown) {
+			NSInteger intId = [self channelIntIdForNostrId:address];
+			NSString *name = address;
+			NSRange colon = [address rangeOfString:@":" options:NSBackwardsSearch];
+			if (colon.location != NSNotFound) {
+				name = [address substringFromIndex:colon.location + 1];
+			}
+			if ([name length] > 12) {
+				name = [name substringToIndex:12];
+			}
+			TLChannel *channel = [[TLChannel alloc] initWithDictionary:@{
+				@"id": @(intId),
+				@"name": name,
+				@"type": @"channel",
+				@"state": @(TLChannelStateJoined)
+			}];
+			[_relayNetwork addChannel:channel];
+			[channel release];
+
+			_nostrChannelIdToInt[address] = @(intId);
+			_nostrChannelIdToInt[groupId] = @(intId);
+			_intToNostrChannelId[@(intId)] = address;
+			[_nip29ChannelIds addObject:@(intId)];
 		}
+		// Rejoin the group so the relay lets us post (kind 9021).
+		[self sendJoinForGroupAddress:address];
+		// Open a per-channel subscription bounded by the local cursor.
+		NSInteger intId = [[_nostrChannelIdToInt objectForKey:address] integerValue];
+		NSString *subId = [NSString stringWithFormat:@"ch-%ld", (long)intId];
+		NSInteger since = [self cursorTimestampForChannel:intId] + 1;
+		NSMutableDictionary *filter = [NSMutableDictionary dictionary];
+		[filter setObject:@[@(9)] forKey:@"kinds"];
+		[filter setObject:@[address, groupId] forKey:@"#h"];
+		[filter setObject:@(100) forKey:@"limit"];
+		if (since > 1) {
+			[filter setObject:@(since) forKey:@"since"];
+		}
+		[self sendReq:subId filter:filter];
+		[_restoredChannelAddresses addObject:address];
+	}
+	if ([_restoredChannelAddresses count] > 0) {
+		NSLog(@"[NOSTERM] restorePersistedChannels: restored %lu persisted channel(s)",
+			(unsigned long)[_restoredChannelAddresses count]);
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TLLoungeNetworkListDidChangeNotification
+			object:self];
 	}
 }
 
@@ -604,6 +694,18 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 			hex[64] = 0;
 			store[@"privateKey"] = [NSString stringWithUTF8String:hex];
 		}
+	}
+	// Persist the set of joined channel addresses so they reappear on relaunch.
+	// NIP-29 groups use "relayURL:groupId"; NIP-28 channels use the event id.
+	NSMutableArray *joined = [NSMutableArray array];
+	for (NSNumber *cid in _intToNostrChannelId) {
+		NSString *address = _intToNostrChannelId[cid];
+		if ([address length] > 0) {
+			[joined addObject:address];
+		}
+	}
+	if ([joined count] > 0) {
+		store[@"joinedChannels"] = joined;
 	}
 	[(NSDictionary *)store writeToFile:[self storePath] atomically:YES];
 }
@@ -779,6 +881,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeNetworkListDidChangeNotification
 		object:self];
+	[self saveLocalStore];
 }
 
 // NIP-28 kind-41: channel metadata update (name, about, picture).
@@ -1261,6 +1364,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TLLoungeNetworkListDidChangeNotification
 		object:self];
+	[self saveLocalStore];
 }
 
 - (void)handleGroupMessage:(NSDictionary *)event
@@ -1716,6 +1820,7 @@ static const NSInteger TLLoungeNostrSearchIdBase = -100000000;
 		[filter setObject:@(since) forKey:@"since"];
 	}
 	[self sendReq:subId filter:filter];
+	[self saveLocalStore];
 }
 
 - (void)handleGroupMembers:(NSDictionary *)event

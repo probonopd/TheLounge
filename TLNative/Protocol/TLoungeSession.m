@@ -285,6 +285,35 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 		NSLog(@"[NOSTERM-SESSION] addRelayWithURL: nil URL, aborting");
 		return;
 	}
+	// If a relay with the same URL already exists, remove it first so the
+	// caller can reconnect a relay that was removed from the sidebar (via
+	// /quit or Forget) without the old client blocking the new one.
+	NSString *target = [relayURL absoluteString];
+	for (NSUInteger i = 0; i < [_relayURLs count]; i++) {
+		if ([[[_relayURLs objectAtIndex:i] absoluteString]
+			isEqualToString:target]) {
+			id client = [_relayClients objectAtIndex:i];
+			TLoungeProtocol *oldProto = [_relayProtocols objectAtIndex:i];
+			// Mark before close so the async disconnect callback
+			// (handleRelayDisconnected:) does not reconnect or corrupt
+			// the wrong protocol when the client is already removed
+			// from _relayClients.
+			[_relayManuallyDisconnected addObject:client];
+			[(TLNostrSocketClient *)client close];
+			[_relayReconnectScheduled removeObjectForKey:client];
+			[_relayReconnectAttempts removeObjectForKey:client];
+			if ([oldProto respondsToSelector:@selector(managedNetwork)]) {
+				TLNetwork *network = [oldProto managedNetwork];
+				if (network) {
+					[_serverState removeNetworkWithUuid:network.uuid];
+				}
+			}
+			[_relayClients removeObjectAtIndex:i];
+			[_relayProtocols removeObjectAtIndex:i];
+			[_relayURLs removeObjectAtIndex:i];
+			break;
+		}
+	}
 	NSLog(@"[NOSTERM-SESSION] addRelayWithURL: %@ username=%@", relayURL, username);
 	TLNostrSocketClient *client = [[TLNostrSocketClient alloc] init];
 	[client setDelegate:self];
@@ -345,13 +374,25 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 		if ([[[_relayURLs objectAtIndex:i] absoluteString]
 			isEqualToString:target]) {
 			id client = [_relayClients objectAtIndex:i];
+			TLoungeProtocol *protocol = [_relayProtocols objectAtIndex:i];
 			[_relayManuallyDisconnected addObject:client];
 			[(TLNostrSocketClient *)client close];
 			[_relayReconnectScheduled removeObjectForKey:client];
 			[_relayReconnectAttempts removeObjectForKey:client];
+			// Remove the network this protocol owns from the server state
+			// so the sidebar clears it immediately.
+			if ([protocol respondsToSelector:@selector(managedNetwork)]) {
+				TLNetwork *network = [protocol managedNetwork];
+				if (network) {
+					[_serverState removeNetworkWithUuid:network.uuid];
+				}
+			}
 			[_relayClients removeObjectAtIndex:i];
 			[_relayProtocols removeObjectAtIndex:i];
 			[_relayURLs removeObjectAtIndex:i];
+			[[NSNotificationCenter defaultCenter]
+				postNotificationName:TLLoungeNetworkListDidChangeNotification
+				object:self];
 			return;
 		}
 	}
@@ -758,6 +799,13 @@ NSString *TLConnectionStateDisplayString(TLConnectionState state)
 
 - (void)handleRelayDisconnected:(id)client
 {
+	// A relay removed by addRelayWithURL: (idempotent reconnect) or
+	// disconnectRelayWithURL: (Forget) is already cleaned up; the async
+	// disconnect callback must not touch the wrong protocol or reschedule.
+	if ([_relayManuallyDisconnected containsObject:client]) {
+		[_relayManuallyDisconnected removeObject:client];
+		return;
+	}
 	[[TLLogger sharedLogger] info:@"Relay disconnected: %@", [client description]];
 	TLoungeProtocol *protocol = [self protocolForClient:client];
 	[protocol resetSession];

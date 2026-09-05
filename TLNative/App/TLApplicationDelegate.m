@@ -411,13 +411,12 @@
 {
 	NSLog(@"[NOSTERM-APP] connectToDemoRelay: FIRED sender=%@ session=%@", sender, _session ? @"exists" : @"nil");
 	NSURL *relayURL = [NSURL URLWithString:TLLoungeNostermDefaultRelayURL];
-	if (_session != nil && [self isRelayConnected:relayURL]) {
-		return;
-	}
 	if (_session == nil) {
 		[self connectToNostermServer:relayURL username:@"guest"];
 		return;
 	}
+	// addRelayWithURL: is idempotent: if the relay already exists (connected
+	// or not), the old client is removed first and a fresh one connects.
 	[_session addRelayWithURL:relayURL username:_session.username privateKey:nil];
 }
 
@@ -704,7 +703,9 @@
 // the main window is on screen so there is always at least one window.
 - (void)restoreSavedServers
 {
+	NSLog(@"[APP] restoreSavedServers: ENTERED, _session=%@", _session ? @"exists" : @"nil");
 	NSMutableArray *saved = [self loadSavedServersList];
+	NSLog(@"[APP] restoreSavedServers: loaded %lu saved server(s)", (unsigned long)[saved count]);
 	if ([saved count] == 0) {
 		return;
 	}
@@ -718,25 +719,32 @@
 	NSString *username = primary[@"username"];
 
 	if ([kind isEqualToString:@"bouncer"]) {
-		// Lounge bouncer: try the stored-token path.
-		NSURL *serverURL = [NSURL URLWithString:url];
-		if (serverURL && [[serverURL host] length] > 0 && [username length] > 0) {
-			TLoungeSession *session = [[TLoungeSession alloc]
-				initWithServerURL:serverURL username:username];
-			NSString *storedToken = [session retrieveStoredToken];
-			// Fall back to the token persisted in the saved-servers list.
-			if ([storedToken length] == 0) {
-				storedToken = primary[@"token"];
-			}
-			if ([storedToken length] > 0) {
-				[_session release];
-				_session = session;
-				[_session setSessionToken:storedToken];
-				[self registerSessionObservers];
-				_autoConnectAttempt = YES;
-				[_session connect];
-			} else {
-				[session release];
+		// Lounge bouncer: try the stored-token path.  If a session is already
+		// active (created by connectWithStoredToken), do NOT replace it --
+		// the main window controller holds a reference to the old session's
+		// serverState and replacing the session would orphan the sidebar.
+		if (_session != nil) {
+			NSLog(@"[APP] restoreSavedServers: bouncer session already active, skipping");
+		} else {
+			NSURL *serverURL = [NSURL URLWithString:url];
+			if (serverURL && [[serverURL host] length] > 0 && [username length] > 0) {
+				TLoungeSession *session = [[TLoungeSession alloc]
+					initWithServerURL:serverURL username:username];
+				NSString *storedToken = [session retrieveStoredToken];
+				// Fall back to the token persisted in the saved-servers list.
+				if ([storedToken length] == 0) {
+					storedToken = primary[@"token"];
+				}
+				if ([storedToken length] > 0) {
+					_session = session;
+					[_session setSessionToken:storedToken];
+					[self registerSessionObservers];
+					_autoConnectAttempt = YES;
+					[self showMainInterface];
+					[_session connect];
+				} else {
+					[session release];
+				}
 			}
 		}
 	} else if ([kind isEqualToString:@"nosterm"]) {

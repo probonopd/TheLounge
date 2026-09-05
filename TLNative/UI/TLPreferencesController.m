@@ -13,7 +13,7 @@
 
 - (instancetype)init
 {
-	NSRect contentRect = NSMakeRect(0, 0, 380, 130);
+	NSRect contentRect = NSMakeRect(0, 0, 380, 160);
 	NSWindow *window = [[NSWindow alloc]
 		initWithContentRect:contentRect
 		              styleMask:(NSTitledWindowMask | NSClosableWindowMask)
@@ -49,6 +49,17 @@
 	[_bubblesCheckbox setState:TLPreferencesUseBubbles() ? NSOnState : NSOffState];
 	[content addSubview:_bubblesCheckbox];
 
+	_soundCheckbox = [[NSButton alloc] initWithFrame:
+		NSMakeRect(sideMargin, NSHeight([content bounds]) - topMargin - 18.0 - 28.0,
+			width - 2.0 * sideMargin, 18.0)];
+	[_soundCheckbox setButtonType:NSSwitchButton];
+	[_soundCheckbox setTitle:@"Play sound on incoming messages"];
+	[_soundCheckbox setAutoresizingMask:NSViewMinYMargin | NSViewWidthSizable];
+	[_soundCheckbox setTarget:self];
+	[_soundCheckbox setAction:@selector(toggleSound:)];
+	[_soundCheckbox setState:TLPreferencesPlaySoundOnIncomingMessages() ? NSOnState : NSOffState];
+	[content addSubview:_soundCheckbox];
+
 	NSTextField *hint = [[NSTextField alloc] initWithFrame:
 		NSMakeRect(sideMargin, 30.0, width - 2.0 * sideMargin, 34.0)];
 	[hint setEditable:NO];
@@ -70,17 +81,25 @@
 	TLPreferencesSetUseBubbles([_bubblesCheckbox state] == NSOnState);
 }
 
+- (void)toggleSound:(id)sender
+{
+	TLPreferencesSetPlaySoundOnIncomingMessages([_soundCheckbox state] == NSOnState);
+}
+
 - (void)showWindow:(id)sender
 {
 	// Reflect changes made elsewhere while the panel was closed.
 	[_bubblesCheckbox setState:
 		TLPreferencesUseBubbles() ? NSOnState : NSOffState];
+	[_soundCheckbox setState:
+		TLPreferencesPlaySoundOnIncomingMessages() ? NSOnState : NSOffState];
 	[super showWindow:sender];
 }
 
 - (void)dealloc
 {
 	[_bubblesCheckbox release];
+	[_soundCheckbox release];
 	[super dealloc];
 }
 

@@ -15,6 +15,7 @@
 #import "TLMessage.h"
 #import "TLUser.h"
 #import "TLPreferences.h"
+#import "TLSoundPlayer.h"
 #import "TLNostermGroupListController.h"
 #import "TLApplicationDelegate.h"
 
@@ -472,6 +473,9 @@
 	NSInteger channelId = [notification.userInfo[@"channelId"] integerValue];
 	TLMessage *message = notification.userInfo[@"message"];
 	[_networkOutline reloadData];
+	if (message) {
+		[self playMessageAlertIfNeeded:message];
+	}
 	if (_selectedChannelId == channelId) {
 		if (message) {
 			if ([self message:message matchesFilter:_filterText]) {
@@ -510,6 +514,33 @@
 		[self markActiveChannelSeen];
 	}
 	[self setWindowTitle];
+}
+
+// A short, quiet sound when a chat message arrives. Own messages, technical
+// lines (join/part/mode/...), muted channels, and catch-up replays of old
+// events stay silent; TLSoundPlayer additionally rate-limits bursts.
+- (void)playMessageAlertIfNeeded:(TLMessage *)message
+{
+	if (!TLPreferencesPlaySoundOnIncomingMessages()) {
+		return;
+	}
+	if ([message isSelf]) {
+		return;
+	}
+	TLMessageType type = [message type];
+	if (type != TLMessageTypeMessage && type != TLMessageTypeAction) {
+		return;
+	}
+	NSDate *timestamp = [message timestamp];
+	if (timestamp == nil || [timestamp timeIntervalSinceNow] < -120.0) {
+		return;
+	}
+	TLChannel *channel = [_session.serverState
+		channelWithIdentifier:[message channelId]];
+	if (channel && [channel muted]) {
+		return;
+	}
+	[TLSoundPlayer playMessageSound];
 }
 
 - (void)protocolHistoryDidChange:(NSNotification *)notification
@@ -1169,16 +1200,30 @@
 	}
 	TLoungeProtocol *proto = [_session protocolForNetwork:network];
 	if ([proto isNostermProtocol]) {
-		// Nosterm relay: find the matching relay URL and disconnect.
+		// Nosterm relay: match by network UUID (the hostname extracted from
+		// the relay URL in ensureRelayNetwork).
+		NSString *networkUUID = network.uuid;
 		for (NSDictionary *relay in [_session connectedRelays]) {
+			if (![[relay objectForKey:@"kind"] isEqualToString:@"nosterm"]) {
+				continue;
+			}
 			NSURL *url = [NSURL URLWithString:relay[@"url"]];
-			if (url && [[relay objectForKey:@"kind"] isEqualToString:@"nosterm"]) {
-				// Match by network name (relay display name).
-				if ([relay[@"name"] isEqualToString:network.name]) {
-					[[NSApp delegate] removeServerFromSavedList:relay[@"url"]];
-					[_session disconnectRelayWithURL:url];
-					return;
-				}
+			if (url && [[[url host] description] isEqualToString:networkUUID]) {
+				[[NSApp delegate] removeServerFromSavedList:relay[@"url"]];
+				[_session disconnectRelayWithURL:url];
+				return;
+			}
+		}
+		// Fallback: try matching by full URL string.
+		for (NSDictionary *relay in [_session connectedRelays]) {
+			if (![[relay objectForKey:@"kind"] isEqualToString:@"nosterm"]) {
+				continue;
+			}
+			NSURL *url = [NSURL URLWithString:relay[@"url"]];
+			if (url) {
+				[[NSApp delegate] removeServerFromSavedList:relay[@"url"]];
+				[_session disconnectRelayWithURL:url];
+				return;
 			}
 		}
 	} else {

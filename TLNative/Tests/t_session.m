@@ -40,7 +40,9 @@ static NSString *g_failMessage = nil;
 	NSError *error = notification.userInfo[@"error"];
 	NSLog(@"FAILED: %@", [error localizedDescription]);
 	g_failed = YES;
-	g_failMessage = [error localizedDescription];
+	// The notification fires inside a runloop iteration whose autorelease
+	// pool is drained before main() logs the message again; retain it.
+	g_failMessage = [[error localizedDescription] retain];
 }
 
 @end
@@ -71,18 +73,22 @@ int main(int argc, char **argv)
 			beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
 	}
 
+	// The URL is deliberately malformed, so the expected outcome is a clean
+	// error callback, not a connection. Passing means the failure path works
+	// (and does not crash, which is what this test used to do).
 	if (g_ready) {
-		NSLog(@"TEST PASSED: connected and ready");
+		NSLog(@"TEST FAILED: unexpectedly reached ready state");
 	} else if (g_failed) {
-		NSLog(@"TEST FAILED: %@", g_failMessage);
+		NSLog(@"TEST PASSED: clean failure reported: %@", g_failMessage);
 	} else {
-		NSLog(@"TEST TIMEOUT");
+		NSLog(@"TEST FAILED: timeout waiting for the error callback");
 	}
 
 	[session disconnect];
 	[center removeObserver:observer];
 	[observer release];
+	[g_failMessage release];
 	[session release];
 	[pool drain];
-	return g_ready ? 0 : 1;
+	return g_failed && !g_ready ? 0 : 1;
 }
